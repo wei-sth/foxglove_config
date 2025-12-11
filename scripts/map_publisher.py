@@ -50,7 +50,7 @@ class MapPublisher(Node):
         self.fix_pub.publish(fix_msg)
 
     def publish_global_map(self):
-        pcd_path = "/home/weizh/Downloads_v2/LOAM/GlobalMap_1124.pcd"
+        pcd_path = "/home/weizh/Downloads/LOAM/GlobalMap.pcd"
         self.get_logger().info(f'正在加载点云: {pcd_path} ...')
 
         # 2. 使用 Open3D 读取
@@ -73,7 +73,7 @@ class MapPublisher(Node):
         # 4. 构建 ROS 2 消息
         header = std_msgs.msg.Header()
         header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = "rslidar"
+        header.frame_id = "odom"
 
         # 使用 sensor_msgs_py 快速打包
         pc2_msg = pc2.create_cloud_xyz32(header, points)

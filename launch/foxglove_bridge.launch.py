@@ -11,13 +11,6 @@ def generate_launch_description():
         ),
 
         Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='odom_to_base',
-            arguments=['0', '0', '0', '0', '0', '0', 'odom', 'rslidar']
-        ),
-
-        Node(
             package='foxglove_config',
             executable='map_publisher.py',
             name='map_publisher',
