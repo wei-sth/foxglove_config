@@ -15,6 +15,7 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 include_directories(
   include
@@ -23,19 +24,26 @@ include_directories(
 )
 
 add_executable(obstacle_detector src/obstacle_detector_standalone.cpp src/obstacle_detector.cpp)
-ament_target_dependencies(obstacle_detector
+add_executable(obstacle_detector_node src/obstacle_detector_node.cpp src/obstacle_detector.cpp)
+ament_target_dependencies(obstacle_detector_node
   rclcpp
   sensor_msgs
   geometry_msgs
   pcl_conversions
+  visualization_msgs
 )
 target_link_libraries(obstacle_detector
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBS}
+)
+target_link_libraries(obstacle_detector_node
   ${PCL_LIBRARIES}
   ${OpenCV_LIBS}
 )
 
 install(TARGETS
   obstacle_detector
+  obstacle_detector_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -47,7 +55,6 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# 安装launch文件 - 添加这部分
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}/

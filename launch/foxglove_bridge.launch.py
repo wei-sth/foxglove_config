@@ -17,17 +17,25 @@ def generate_launch_description():
             output='screen'
         ),
 
-        Node(
-            package='foxglove_config',
-            executable='test_1216.py',
-            name='test_1216',
-            output='screen'
-        ),
+        # Node(
+        #     package='foxglove_config',
+        #     executable='test_1216.py',
+        #     name='test_1216',
+        #     output='screen'
+        # ),
+
+        # algorithm debug
+        # Node(
+        #     package='foxglove_config',
+        #     executable='obstacle_detector',
+        #     name='obstacle_detector',
+        #     output='screen'
+        # ),
 
         Node(
             package='foxglove_config',
-            executable='obstacle_detector',
-            name='obstacle_detector',
+            executable='obstacle_detector_node',
+            name='obstacle_detector_node',
             output='screen'
         ),
 

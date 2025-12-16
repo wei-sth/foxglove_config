@@ -4,13 +4,6 @@
 #include <pcl/segmentation/extract_clusters.h>
 #include <algorithm>
 
-// ROS 2 related headers
-#include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <geometry_msgs/msg/pose_array.hpp>
-#include <geometry_msgs/msg/pose.hpp>
-#include <pcl_conversions/pcl_conversions.h>
-
 RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_sectors, 
                                float max_distance, float min_cluster_z_difference)
     : num_rings(num_rings), num_sectors(num_sectors), max_distance(max_distance),
