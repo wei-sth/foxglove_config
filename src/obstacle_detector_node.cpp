@@ -14,7 +14,7 @@ public:
         this->declare_parameter<int>("num_rings", 16);
         this->declare_parameter<int>("num_sectors", 2000);
         this->declare_parameter<float>("max_distance", 10.0f);
-        this->declare_parameter<float>("min_cluster_z_difference", 0.5f);
+        this->declare_parameter<float>("min_cluster_z_difference", 0.2f);
         this->declare_parameter<std::string>("input_topic", "/unitree/slam_lidar/points");
         this->declare_parameter<std::string>("output_topic", "/obstacle_bbox");
 
@@ -46,8 +46,8 @@ private:
         pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw(new pcl::PointCloud<PointXYZIRT>);
         pcl::fromROSMsg(*msg, *cloud_raw);
 
-        pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles = detector_->detectObstacles(cloud_raw);
-        std::vector<RotatedBoundingBox> rotated_bboxes = getObstacleBoundingBoxesNew(obstacles);
+        std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters = detector_->detectObstacles(cloud_raw);
+        std::vector<RotatedBoundingBox> rotated_bboxes = detector_->getObstacleBoundingBoxesNew(obstacle_clusters);
 
         visualization_msgs::msg::MarkerArray marker_array_msg;
 

@@ -5,8 +5,8 @@ int main(int argc, char * argv[]) {
     // PCD file processing mode
     int num_rings = 16;
     int num_sectors = 2000;
-    float max_distance = 15.0f;
-    float min_cluster_z_difference = 0.2f;
+    float max_distance = 15.0f; // Aligned with obstacle_detector_node.cpp
+    float min_cluster_z_difference = 0.2f; // Aligned with obstacle_detector_node.cpp
 
     RangeImageObstacleDetector detector(num_rings, num_sectors, max_distance, min_cluster_z_difference);
     
@@ -22,7 +22,7 @@ int main(int argc, char * argv[]) {
     std::cout << "Loaded " << cloud_raw->width * cloud_raw->height
                 << " data points from " << pcd_file_path << std::endl;
     
-    pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles = detector.detectObstacles(cloud_raw);
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters = detector.detectObstacles(cloud_raw);
     
     // Call visualizeNormals to save the normal visualization image
     // std::string normal_image_path = "/home/weizh/data/normal_visualization.png";
@@ -43,22 +43,31 @@ int main(int argc, char * argv[]) {
     // detector.saveNongroundBeforeClusteringToPCD(nonground_pcd_path);
     // std::cout << "Range image nonground saved to " << nonground_pcd_path << std::endl;
 
-    std::vector<BoundingBox> bboxes = getObstacleBoundingBoxes(obstacles);
+    std::vector<RotatedBoundingBox> rotated_bboxes = detector.getObstacleBoundingBoxesNew(obstacle_clusters);
     
-    std::cout << "Detected " << bboxes.size() << " bounding boxes:" << std::endl;
-    for (const auto& bbox : bboxes) {
-        std::cout << "  Center: (" << bbox.center.x << ", " << bbox.center.y << ", " << bbox.center.z << ")"
-                    << "  Min: (" << bbox.min_point.x << ", " << bbox.min_point.y << ", " << bbox.min_point.z << ")"
-                    << "  Max: (" << bbox.max_point.x << ", " << bbox.max_point.y << ", " << bbox.max_point.z << ")"
-                    << std::endl;
+    std::cout << "Detected " << rotated_bboxes.size() << " rotated bounding boxes:" << std::endl;
+    for (const auto& rbbox : rotated_bboxes) {
+        std::cout << "  Center: (" << rbbox.center.x << ", " << rbbox.center.y << ", " << rbbox.center.z << ")"
+                    << "  Width: " << rbbox.width << ", Height: " << rbbox.height << ", Angle: " << rbbox.angle << std::endl;
     }
 
+    // Save bounding boxes to OBJ file for CloudCompare visualization
+    std::string bbox_obj_path = "/home/weizh/data/obstacle_bboxes.obj";
+    detector.saveRotatedBoundingBoxesToObj(rotated_bboxes, bbox_obj_path);
+    std::cout << "Rotated bounding boxes saved to " << bbox_obj_path << std::endl;
+
     // Optionally save obstacles to PCD for visualization
+    // Concatenate all clusters into a single point cloud for saving
+    pcl::PointCloud<pcl::PointXYZI>::Ptr all_obstacles(new pcl::PointCloud<pcl::PointXYZI>);
+    for (const auto& cluster : obstacle_clusters) {
+        *all_obstacles += *cluster;
+    }
+
     std::string output_pcd_path = "/home/weizh/data/obstacles.pcd";
-    obstacles->width = obstacles->points.size();
-    obstacles->height = 1;
-    obstacles->is_dense = true;
-    pcl::io::savePCDFileBinary(output_pcd_path, *obstacles);
+    all_obstacles->width = all_obstacles->points.size();
+    all_obstacles->height = 1;
+    all_obstacles->is_dense = true;
+    pcl::io::savePCDFileBinary(output_pcd_path, *all_obstacles);
     std::cout << "Detected obstacles saved to " << output_pcd_path << std::endl;
 
     return 0;

@@ -5,8 +5,10 @@
 #include <pcl/segmentation/extract_clusters.h>
 #include <algorithm>
 #include <iostream> // For std::cout
+#include <fstream>  // For file operations (OBJ saving)
 #include <pcl/common/pca.h>
 #include <Eigen/Dense>
+#include <Eigen/Geometry> // For Eigen::AngleAxisf
 #include <queue> // Required for std::queue
 
 // ring index = row index
@@ -33,7 +35,7 @@ RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_se
     valid_mask_ = cv::Mat(num_rings, num_sectors, CV_8UC1, cv::Scalar(0));
 }
 
-pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::detectObstacles(
+std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::detectObstacles(
     pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw) {
     
     // Step 1: Filter by distance and convert to PointXYZINormal
@@ -46,20 +48,20 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::detectObstacles
     auto obstacles_with_normal_info = segmentGroundByNormal();
     
     // debug
-    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_with_normal_info);
+    // pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_with_normal_info);
 
     // Step 4: Perform clustering using Euclidean method
     // return clusterEuclidean(obstacles_with_normal_info);
     return clusterConnectivity(obstacles_with_normal_info);
 }
 
-pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterEuclidean(
+std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::clusterEuclidean(
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info) {
     
-    pcl::PointCloud<pcl::PointXYZI>::Ptr clustered_obstacles(new pcl::PointCloud<pcl::PointXYZI>);
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clustered_obstacles_vector;
     
     if (obstacles_with_normal_info->points.empty()) {
-        return clustered_obstacles;
+        return clustered_obstacles_vector;
     }
 
     float current_intensity = 0.0f; // Initialize intensity for clusters
@@ -100,21 +102,21 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterEuclidea
         
         // Filter clusters based on the number of rings spanned AND Z-difference
         if (rings_in_cluster.size() >= 2 && (max_z_cluster - min_z_cluster) > min_cluster_z_difference_) {
-            *clustered_obstacles += *current_cluster_xyzi;
+            clustered_obstacles_vector.push_back(current_cluster_xyzi);
             current_intensity += 10.0f; // Increment intensity for the next cluster
         }
     }
     
-    return clustered_obstacles;
+    return clustered_obstacles_vector;
 }
 
-pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterConnectivity(
+std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::clusterConnectivity(
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info) {
     
-    pcl::PointCloud<pcl::PointXYZI>::Ptr clustered_obstacles(new pcl::PointCloud<pcl::PointXYZI>);
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clustered_obstacles_vector;
     
     if (obstacles_with_normal_info->points.empty()) {
-        return clustered_obstacles;
+        return clustered_obstacles_vector;
     }
 
     // Clear and reset member variables for current frame
@@ -190,15 +192,15 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterConnecti
                 }
 
                 // Filter clusters based on the number of rings spanned AND Z-difference
-                if (current_cluster_xyzi->points.size() >= 20 && rings_in_cluster.size() >= 2 && (max_z_cluster - min_z_cluster) > min_cluster_z_difference_) {
-                    *clustered_obstacles += *current_cluster_xyzi;
+                if (current_cluster_xyzi->points.size() >= 10 && rings_in_cluster.size() >= 2 && (max_z_cluster - min_z_cluster) > min_cluster_z_difference_) {
+                    clustered_obstacles_vector.push_back(current_cluster_xyzi);
                     current_intensity += 10.0f;
                 }
             }
         }
     }
     
-    return clustered_obstacles;
+    return clustered_obstacles_vector;
 }
 
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByDistance(pcl::PointCloud<PointXYZIRT>::Ptr cloud) {
@@ -519,7 +521,7 @@ void RangeImageObstacleDetector::saveNormalsToPCD(const std::string& path) {
     pcl::io::savePCDFileBinary(path, *cloud_with_normals);
 }
 
-std::vector<BoundingBox> getObstacleBoundingBoxes(
+std::vector<BoundingBox> RangeImageObstacleDetector::getObstacleBoundingBoxes(
     pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles) {
     
     pcl::search::KdTree<pcl::PointXYZI>::Ptr tree(
@@ -571,36 +573,19 @@ std::vector<BoundingBox> getObstacleBoundingBoxes(
     return bboxes;
 }
 
-std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
-    pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles) {
-    
-    pcl::search::KdTree<pcl::PointXYZI>::Ptr tree(
-        new pcl::search::KdTree<pcl::PointXYZI>);
-    tree->setInputCloud(obstacles);
-    
-    std::vector<pcl::PointIndices> cluster_indices;
-    pcl::EuclideanClusterExtraction<pcl::PointXYZI> ec;
-    ec.setClusterTolerance(0.3);  // 30cm cluster distance
-    ec.setMinClusterSize(20);     // Min 20 points
-    ec.setMaxClusterSize(10000);
-    ec.setSearchMethod(tree);
-    ec.setInputCloud(obstacles);
-    ec.extract(cluster_indices);
+std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingBoxesNew(
+    const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
     
     std::vector<RotatedBoundingBox> rotated_bboxes;
-    for (const auto& indices : cluster_indices) {
-        pcl::PointCloud<pcl::PointXYZI>::Ptr current_cluster(new pcl::PointCloud<pcl::PointXYZI>);
+    for (const auto& current_cluster : clusters) {
+        if (current_cluster->points.empty()) continue;
+
         float min_z_cluster = std::numeric_limits<float>::max();
         float max_z_cluster = -std::numeric_limits<float>::max();
-
-        for (int idx : indices.indices) {
-            const auto& pt = obstacles->points[idx];
-            current_cluster->points.push_back(pt);
+        for (const auto& pt : current_cluster->points) {
             min_z_cluster = std::min(min_z_cluster, pt.z);
             max_z_cluster = std::max(max_z_cluster, pt.z);
         }
-
-        if (current_cluster->points.empty()) continue;
 
         // Compute PCA for the cluster
         pcl::PCA<pcl::PointXYZI> pca;
@@ -641,4 +626,73 @@ std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
     }
     
     return rotated_bboxes;
+}
+
+void RangeImageObstacleDetector::saveRotatedBoundingBoxesToObj(
+    const std::vector<RotatedBoundingBox>& rotated_bboxes,
+    const std::string& file_path) {
+    
+    std::ofstream obj_file(file_path);
+    if (!obj_file.is_open()) {
+        std::cerr << "Error: Could not open OBJ file for writing: " << file_path << std::endl;
+        return;
+    }
+
+    int vertex_offset = 0; // To keep track of vertex indices for multiple boxes
+
+    for (size_t i = 0; i < rotated_bboxes.size(); ++i) {
+        const auto& rbbox = rotated_bboxes[i];
+
+        // Calculate half dimensions
+        float half_width = rbbox.width / 2.0f;
+        float half_height = rbbox.height / 2.0f;
+        float half_depth = (rbbox.max_z_point.z - rbbox.min_z_point.z) / 2.0f;
+
+        // Base points in the local coordinate system of the bbox (before rotation and translation)
+        std::vector<Eigen::Vector3f> local_corners = {
+            {-half_width, -half_height, -half_depth}, // 0
+            { half_width, -half_height, -half_depth}, // 1
+            { half_width,  half_height, -half_depth}, // 2
+            {-half_width,  half_height, -half_depth}, // 3
+            {-half_width, -half_height,  half_depth}, // 4
+            { half_width, -half_height,  half_depth}, // 5
+            { half_width,  half_height,  half_depth}, // 6
+            {-half_width,  half_height,  half_depth}  // 7
+        };
+
+        // Create rotation matrix around Z-axis
+        Eigen::AngleAxisf rotation_z(rbbox.angle, Eigen::Vector3f::UnitZ());
+        Eigen::Matrix3f rotation_matrix = rotation_z.toRotationMatrix();
+
+        // Translate and rotate each local corner to global coordinates
+        Eigen::Vector3f center_eigen(rbbox.center.x, rbbox.center.y, rbbox.center.z);
+
+        obj_file << "o BoundingBox_" << i << std::endl; // Object name
+
+        // Write vertices
+        for (const auto& lc : local_corners) {
+            Eigen::Vector3f rotated_corner = rotation_matrix * lc;
+            Eigen::Vector3f global_corner = center_eigen + rotated_corner;
+            obj_file << "v " << global_corner.x() << " " << global_corner.y() << " " << global_corner.z() << std::endl;
+        }
+
+        // Define faces (1-based indexing relative to the current object's vertices)
+        // Bottom face
+        obj_file << "f " << (vertex_offset + 1) << " " << (vertex_offset + 2) << " " << (vertex_offset + 3) << " " << (vertex_offset + 4) << std::endl;
+        // Top face
+        obj_file << "f " << (vertex_offset + 5) << " " << (vertex_offset + 6) << " " << (vertex_offset + 7) << " " << (vertex_offset + 8) << std::endl;
+        // Front face
+        obj_file << "f " << (vertex_offset + 1) << " " << (vertex_offset + 2) << " " << (vertex_offset + 6) << " " << (vertex_offset + 5) << std::endl;
+        // Back face
+        obj_file << "f " << (vertex_offset + 4) << " " << (vertex_offset + 3) << " " << (vertex_offset + 7) << " " << (vertex_offset + 8) << std::endl;
+        // Left face
+        obj_file << "f " << (vertex_offset + 1) << " " << (vertex_offset + 4) << " " << (vertex_offset + 8) << " " << (vertex_offset + 5) << std::endl;
+        // Right face
+        obj_file << "f " << (vertex_offset + 2) << " " << (vertex_offset + 3) << " " << (vertex_offset + 7) << " " << (vertex_offset + 6) << std::endl;
+
+        vertex_offset += 8; // Increment offset for the next bounding box
+    }
+
+    obj_file.close();
+    std::cout << "Saved " << rotated_bboxes.size() << " bounding boxes to " << file_path << std::endl;
 }

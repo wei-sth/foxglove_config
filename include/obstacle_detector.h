@@ -44,7 +44,7 @@ public:
     RangeImageObstacleDetector(int num_rings = 16, int num_sectors = 1800, 
                                float max_distance = 10.0f, float min_cluster_z_difference = 0.1f);
     
-    pcl::PointCloud<pcl::PointXYZI>::Ptr detectObstacles(pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw);
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> detectObstacles(pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw);
     
 private:
     int num_rings;
@@ -65,19 +65,22 @@ private:
     void buildRangeImage(pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud);
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr segmentGroundByNormal();
     Eigen::Vector3f computeNormal(int row, int col);
-    pcl::PointCloud<pcl::PointXYZI>::Ptr clusterEuclidean(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
-    pcl::PointCloud<pcl::PointXYZI>::Ptr clusterConnectivity(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clusterEuclidean(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clusterConnectivity(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
     
 public:
     cv::Mat visualizeRangeImage();
     void visualizeNormals(const std::string& path);
     void saveNormalsToPCD(const std::string& path);
+    std::vector<BoundingBox> getObstacleBoundingBoxes(
+        pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles);
+
+    std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
+        const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
+    
+    void saveRotatedBoundingBoxesToObj(
+        const std::vector<RotatedBoundingBox>& rotated_bboxes,
+        const std::string& file_path);
 };
-
-std::vector<BoundingBox> getObstacleBoundingBoxes(
-    pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles);
-
-std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
-    pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles);
 
 #endif // OBSTACLE_DETECTOR_H
