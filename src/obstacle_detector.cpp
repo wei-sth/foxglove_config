@@ -224,11 +224,11 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGr
 }
 
 Eigen::Vector3f RangeImageObstacleDetector::computeNormal(int row, int col) {
-    // find vertical neighbor, handle boundary, todo: consider handle horizontal boundary?
-    int row_ver = (row < num_rings - 1) ? (row + 1) : (row - 1);
-    int col_right = (col + 1) % num_sectors;
+    // find vertical and horizontal neighbor, handle boundary, default use row+1 because row+1 is lower (ground)
+    int row_ver = (row < num_rings - 1) ? (row + 1) : (row - 1); // lower
+    int col_hor = (col + 1) % num_sectors;  // right
     
-    if (!valid_mask_.at<uint8_t>(row, col_right) || !valid_mask_.at<uint8_t>(row_ver, col)) {
+    if (!valid_mask_.at<uint8_t>(row, col_hor) || !valid_mask_.at<uint8_t>(row_ver, col)) {
         return Eigen::Vector3f(0, 0, 1);
     }
     
@@ -236,15 +236,15 @@ Eigen::Vector3f RangeImageObstacleDetector::computeNormal(int row, int col) {
                      y_image_.at<float>(row, col),
                      z_image_.at<float>(row, col));
     
-    Eigen::Vector3f p_right(x_image_.at<float>(row, col_right),
-                           y_image_.at<float>(row, col_right),
-                           z_image_.at<float>(row, col_right));
+    Eigen::Vector3f p_hor(x_image_.at<float>(row, col_hor),
+                           y_image_.at<float>(row, col_hor),
+                           z_image_.at<float>(row, col_hor));
     
     Eigen::Vector3f p_ver(x_image_.at<float>(row_ver, col),
                           y_image_.at<float>(row_ver, col),
                           z_image_.at<float>(row_ver, col));
     
-    Eigen::Vector3f v1 = p_right - p;
+    Eigen::Vector3f v1 = p_hor - p;
     Eigen::Vector3f v2 = p_ver - p;
     
     // discontinuity check, if p is far away (0.5m) from its neighbor, they do not belong to the same object, 0.5 is ok for 10m detector, if further, v2.norm() > 0.5f might need to change
@@ -316,7 +316,7 @@ void RangeImageObstacleDetector::saveNormalsToPCD(const std::string& path) {
         new pcl::PointCloud<pcl::PointXYZINormal>);
 
     for (int row = 0; row < num_rings; ++row) {
-        for (int col = 1; col < num_sectors - 1; ++col) {
+        for (int col = 0; col < num_sectors; ++col) {
             if (!valid_mask_.at<uint8_t>(row, col)) continue;
 
             float x = x_image_.at<float>(row, col);
