@@ -5,6 +5,7 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include "/home/weizh/foxglove_ws/src/foxglove_config/include/obstacle_detector.h"
+#include <cmath> // For std::sin and std::cos
 
 class ObstacleDetectorNode : public rclcpp::Node {
 public:
@@ -40,13 +41,13 @@ public:
 
 private:
     void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-        RCLCPP_INFO(this->get_logger(), "Received PointCloud2 message.");
+        // RCLCPP_INFO(this->get_logger(), "Received PointCloud2 message.");
 
         pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw(new pcl::PointCloud<PointXYZIRT>);
         pcl::fromROSMsg(*msg, *cloud_raw);
 
         pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles = detector_->detectObstacles(cloud_raw);
-        std::vector<BoundingBox> bboxes = getObstacleBoundingBoxes(obstacles);
+        std::vector<RotatedBoundingBox> rotated_bboxes = getObstacleBoundingBoxesNew(obstacles);
 
         visualization_msgs::msg::MarkerArray marker_array_msg;
 
@@ -56,8 +57,8 @@ private:
         delete_marker.action = visualization_msgs::msg::Marker::DELETEALL;
         marker_array_msg.markers.push_back(delete_marker);
 
-        for (size_t i = 0; i < bboxes.size(); ++i) {
-            const auto& bbox = bboxes[i];
+        for (size_t i = 0; i < rotated_bboxes.size(); ++i) {
+            const auto& rbbox = rotated_bboxes[i];
             visualization_msgs::msg::Marker marker;
             marker.header = msg->header;
             marker.ns = "obstacle_bboxes";
@@ -65,14 +66,20 @@ private:
             marker.type = visualization_msgs::msg::Marker::CUBE;
             marker.action = visualization_msgs::msg::Marker::ADD;
 
-            marker.pose.position.x = bbox.center.x;
-            marker.pose.position.y = bbox.center.y;
-            marker.pose.position.z = bbox.center.z;
-            marker.pose.orientation.w = 1.0; // No rotation
+            marker.pose.position.x = rbbox.center.x;
+            marker.pose.position.y = rbbox.center.y;
+            marker.pose.position.z = (rbbox.min_z_point.z + rbbox.max_z_point.z) / 2.0f; // Center Z
 
-            marker.scale.x = bbox.max_point.x - bbox.min_point.x;
-            marker.scale.y = bbox.max_point.y - bbox.min_point.y;
-            marker.scale.z = bbox.max_point.z - bbox.min_point.z;
+            // Manually set orientation from yaw angle
+            // Assuming rotation only around Z-axis (yaw)
+            marker.pose.orientation.x = 0.0;
+            marker.pose.orientation.y = 0.0;
+            marker.pose.orientation.z = std::sin(rbbox.angle / 2.0);
+            marker.pose.orientation.w = std::cos(rbbox.angle / 2.0);
+
+            marker.scale.x = rbbox.width;
+            marker.scale.y = rbbox.height;
+            marker.scale.z = rbbox.max_z_point.z - rbbox.min_z_point.z;
 
             // Simple color cycling
             marker.color.a = 0.5;
@@ -86,9 +93,14 @@ private:
             marker.color.b = fmod(marker.color.b, 1.0);
 
             marker_array_msg.markers.push_back(marker);
+
+            if (rbbox.width > 2.0 || rbbox.height > 2.0) {
+                RCLCPP_WARN(this->get_logger(), "Large rotated bounding box detected! Timestamp: %d_%u, Width: %.2f, Height: %.2f",
+                            msg->header.stamp.sec, msg->header.stamp.nanosec, rbbox.width, rbbox.height);
+            }
         }
         publisher_->publish(marker_array_msg);
-        RCLCPP_INFO(this->get_logger(), "Published %zu bounding box markers.", bboxes.size());
+        // RCLCPP_INFO(this->get_logger(), "Published %zu rotated bounding box markers.", rotated_bboxes.size());
     }
 
     std::unique_ptr<RangeImageObstacleDetector> detector_;

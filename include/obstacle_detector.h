@@ -32,6 +32,13 @@ struct BoundingBox {
     float width, height, depth;
 };
 
+struct RotatedBoundingBox {
+    pcl::PointXYZ center;
+    float width, height, angle; // angle in radians
+    pcl::PointXYZ min_z_point; // Store min_z for the cluster
+    pcl::PointXYZ max_z_point; // Store max_z for the cluster
+};
+
 class RangeImageObstacleDetector {
 public:
     RangeImageObstacleDetector(int num_rings = 16, int num_sectors = 1800, 
@@ -64,6 +71,9 @@ public:
 };
 
 std::vector<BoundingBox> getObstacleBoundingBoxes(
+    pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles);
+
+std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
     pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles);
 
 #endif // OBSTACLE_DETECTOR_H

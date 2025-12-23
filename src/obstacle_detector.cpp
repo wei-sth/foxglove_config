@@ -5,6 +5,8 @@
 #include <pcl/segmentation/extract_clusters.h>
 #include <algorithm>
 #include <iostream> // For std::cout
+#include <pcl/common/pca.h>
+#include <Eigen/Dense>
 
 // ring index = row index
 // note xt16, ring 15 is the lowest, ring 0 is the highest, ring 15 and ring 14 angle difference is 2 degree
@@ -391,4 +393,76 @@ std::vector<BoundingBox> getObstacleBoundingBoxes(
     }
     
     return bboxes;
+}
+
+std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
+    pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles) {
+    
+    pcl::search::KdTree<pcl::PointXYZI>::Ptr tree(
+        new pcl::search::KdTree<pcl::PointXYZI>);
+    tree->setInputCloud(obstacles);
+    
+    std::vector<pcl::PointIndices> cluster_indices;
+    pcl::EuclideanClusterExtraction<pcl::PointXYZI> ec;
+    ec.setClusterTolerance(0.3);  // 30cm cluster distance
+    ec.setMinClusterSize(20);     // Min 20 points
+    ec.setMaxClusterSize(10000);
+    ec.setSearchMethod(tree);
+    ec.setInputCloud(obstacles);
+    ec.extract(cluster_indices);
+    
+    std::vector<RotatedBoundingBox> rotated_bboxes;
+    for (const auto& indices : cluster_indices) {
+        pcl::PointCloud<pcl::PointXYZI>::Ptr current_cluster(new pcl::PointCloud<pcl::PointXYZI>);
+        float min_z_cluster = std::numeric_limits<float>::max();
+        float max_z_cluster = -std::numeric_limits<float>::max();
+
+        for (int idx : indices.indices) {
+            const auto& pt = obstacles->points[idx];
+            current_cluster->points.push_back(pt);
+            min_z_cluster = std::min(min_z_cluster, pt.z);
+            max_z_cluster = std::max(max_z_cluster, pt.z);
+        }
+
+        if (current_cluster->points.empty()) continue;
+
+        // Compute PCA for the cluster
+        pcl::PCA<pcl::PointXYZI> pca;
+        pca.setInputCloud(current_cluster);
+        Eigen::Matrix3f eigen_vectors = pca.getEigenVectors();
+        Eigen::Vector4f centroid = pca.getMean();
+
+        // Project points to the 2D plane defined by the first two principal components
+        pcl::PointCloud<pcl::PointXYZI>::Ptr projected_points(new pcl::PointCloud<pcl::PointXYZI>);
+        pca.project(*current_cluster, *projected_points);
+
+        // Find min/max in the projected 2D space
+        pcl::PointXYZI min_pt_proj, max_pt_proj;
+        pcl::getMinMax3D(*projected_points, min_pt_proj, max_pt_proj);
+
+        // Calculate width, height, and angle
+        float width = max_pt_proj.x - min_pt_proj.x;
+        float height = max_pt_proj.y - min_pt_proj.y;
+        
+        // The angle of the first principal component with the x-axis
+        // Eigen_vectors.col(0) is the first principal component
+        float angle = std::atan2(eigen_vectors(1, 0), eigen_vectors(0, 0));
+
+        RotatedBoundingBox rbbox;
+        rbbox.center.x = centroid[0];
+        rbbox.center.y = centroid[1];
+        rbbox.center.z = centroid[2]; // Use the centroid's Z for the center of the rotated box
+        rbbox.width = width;
+        rbbox.height = height;
+        rbbox.angle = angle;
+        rbbox.min_z_point.z = min_z_cluster;
+        rbbox.max_z_point.z = max_z_cluster;
+
+        // Filter by a minimum volume or size if needed
+        if (width > 0.01 && height > 0.01 && (max_z_cluster - min_z_cluster) > 0.01) {
+            rotated_bboxes.push_back(rbbox);
+        }
+    }
+    
+    return rotated_bboxes;
 }
