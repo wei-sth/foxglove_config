@@ -10,6 +10,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry> // For Eigen::AngleAxisf
 #include <queue> // Required for std::queue
+#include <cmath> // For std::abs
 
 // ring index = row index
 // note xt16, ring 15 is the lowest, ring 0 is the highest, ring 15 and ring 14 angle difference is 2 degree
@@ -602,25 +603,58 @@ std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingB
         pcl::getMinMax3D(*projected_points, min_pt_proj, max_pt_proj);
 
         // Calculate width, height, and angle
-        float width = max_pt_proj.x - min_pt_proj.x;
-        float height = max_pt_proj.y - min_pt_proj.y;
-        
-        // The angle of the first principal component with the x-axis
-        // Eigen_vectors.col(0) is the first principal component
-        float angle = std::atan2(eigen_vectors(1, 0), eigen_vectors(0, 0));
+        // Calculate dimensions along the principal axes
+        float dim[3];
+        dim[0] = max_pt_proj.x - min_pt_proj.x; // Extent along 1st PC
+        dim[1] = max_pt_proj.y - min_pt_proj.y; // Extent along 2nd PC
+        dim[2] = max_pt_proj.z - min_pt_proj.z; // Extent along 3rd PC
+
+        // Determine which principal component is most vertical (aligned with global Z)
+        int vertical_pc_idx = 0;
+        float max_z_component = std::abs(eigen_vectors(2, 0)); // Z-component of 1st PC
+        if (std::abs(eigen_vectors(2, 1)) > max_z_component) {
+            max_z_component = std::abs(eigen_vectors(2, 1));
+            vertical_pc_idx = 1;
+        }
+        if (std::abs(eigen_vectors(2, 2)) > max_z_component) {
+            max_z_component = std::abs(eigen_vectors(2, 2));
+            vertical_pc_idx = 2;
+        }
+
+        // The other two principal components are considered horizontal
+        std::vector<int> horizontal_pc_indices;
+        for (int i = 0; i < 3; ++i) {
+            if (i != vertical_pc_idx) {
+                horizontal_pc_indices.push_back(i);
+            }
+        }
+
+        float horizontal_dim1 = dim[horizontal_pc_indices[0]];
+        float horizontal_dim2 = dim[horizontal_pc_indices[1]];
+
+        // Assign width and height to the two horizontal dimensions
+        // It's conventional to assign the larger one to width, but for a general box, order doesn't strictly matter
+        float final_width = horizontal_dim1;
+        float final_height = horizontal_dim2;
+
+        // Calculate the angle of the "primary" horizontal principal component with the global X-axis
+        // We pick the first identified horizontal PC to define the angle.
+        Eigen::Vector3f primary_horizontal_pc = eigen_vectors.col(horizontal_pc_indices[0]);
+        float angle = std::atan2(primary_horizontal_pc(1), primary_horizontal_pc(0)); // Angle of this PC's XY projection
 
         RotatedBoundingBox rbbox;
         rbbox.center.x = centroid[0];
         rbbox.center.y = centroid[1];
-        rbbox.center.z = centroid[2]; // Use the centroid's Z for the center of the rotated box
-        rbbox.width = width;
-        rbbox.height = height;
+        rbbox.center.z = (min_z_cluster + max_z_cluster) / 2.0f; // Corrected Z-center: midpoint of actual Z range
+        rbbox.width = final_width;
+        rbbox.height = final_height;
         rbbox.angle = angle;
         rbbox.min_z_point.z = min_z_cluster;
         rbbox.max_z_point.z = max_z_cluster;
 
         // Filter by a minimum volume or size if needed
-        if (width > 0.01 && height > 0.01 && (max_z_cluster - min_z_cluster) > 0.01) {
+        // Use the actual 3D dimensions for filtering
+        if (dim[0] > 0.01 && dim[1] > 0.01 && dim[2] > 0.01) {
             rotated_bboxes.push_back(rbbox);
         }
     }
