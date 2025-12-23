@@ -7,6 +7,7 @@
 #include <iostream> // For std::cout
 #include <pcl/common/pca.h>
 #include <Eigen/Dense>
+#include <queue> // Required for std::queue
 
 // ring index = row index
 // note xt16, ring 15 is the lowest, ring 0 is the highest, ring 15 and ring 14 angle difference is 2 degree
@@ -40,7 +41,17 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::detectObstacles
     // Step 3: Segment ground by normal and get obstacles with ring info in normal_x
     auto obstacles_with_normal_info = segmentGroundByNormal();
     
-    // Step 4: Perform clustering on the detected obstacles (PointXYZINormal)
+    // debug
+    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_with_normal_info);
+
+    // Step 4: Perform clustering using Euclidean method
+    // return clusterEuclidean(obstacles_with_normal_info);
+    return clusterConnectivity(obstacles_with_normal_info);
+}
+
+pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterEuclidean(
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info) {
+    
     pcl::PointCloud<pcl::PointXYZI>::Ptr clustered_obstacles(new pcl::PointCloud<pcl::PointXYZI>);
     
     if (obstacles_with_normal_info->points.empty()) {
@@ -87,6 +98,98 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::detectObstacles
         if (rings_in_cluster.size() >= 2 && (max_z_cluster - min_z_cluster) > min_cluster_z_difference_) {
             *clustered_obstacles += *current_cluster_xyzi;
             current_intensity += 10.0f; // Increment intensity for the next cluster
+        }
+    }
+    
+    return clustered_obstacles;
+}
+
+pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterConnectivity(
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info) {
+    
+    pcl::PointCloud<pcl::PointXYZI>::Ptr clustered_obstacles(new pcl::PointCloud<pcl::PointXYZI>);
+    
+    if (obstacles_with_normal_info->points.empty()) {
+        return clustered_obstacles;
+    }
+
+    // Create a temporary 2D grid to map (row, col) to points in obstacles_with_normal_info
+    // Initialize with nullptr or a special value indicating no point
+    std::vector<std::vector<const pcl::PointXYZINormal*>> obstacle_grid(num_rings, std::vector<const pcl::PointXYZINormal*>(num_sectors, nullptr));
+    cv::Mat temp_valid_mask = cv::Mat::zeros(num_rings, num_sectors, CV_8UC1);
+
+    for (const auto& pt : obstacles_with_normal_info->points) {
+        uint16_t ring = static_cast<uint16_t>(pt.normal_x);
+        int col = static_cast<int>(pt.normal_y);
+
+        if (ring < num_rings && col >= 0 && col < num_sectors) {
+            obstacle_grid[ring][col] = &pt;
+            temp_valid_mask.at<uint8_t>(ring, col) = 1;
+        }
+    }
+
+    cv::Mat visited_mask = cv::Mat::zeros(num_rings, num_sectors, CV_8UC1);
+    float current_intensity = 0.0f;
+
+    // Define 8-connectivity neighbors (dr, dc)
+    int dr[] = {-1, -1, -1,  0, 0,  1, 1, 1};
+    int dc[] = {-1,  0,  1, -1, 1, -1, 0, 1};
+
+    for (int r = 0; r < num_rings; ++r) {
+        for (int c = 0; c < num_sectors; ++c) {
+            if (temp_valid_mask.at<uint8_t>(r, c) == 1 && visited_mask.at<uint8_t>(r, c) == 0) {
+                // Start a new cluster
+                pcl::PointCloud<pcl::PointXYZI>::Ptr current_cluster_xyzi(new pcl::PointCloud<pcl::PointXYZI>);
+                std::set<uint16_t> rings_in_cluster;
+                float min_z_cluster = std::numeric_limits<float>::max();
+                float max_z_cluster = -std::numeric_limits<float>::max();
+
+                std::queue<std::pair<int, int>> q;
+                q.push({r, c});
+                visited_mask.at<uint8_t>(r, c) = 1;
+
+                while (!q.empty()) {
+                    std::pair<int, int> current_rc = q.front();
+                    q.pop();
+                    int cur_r = current_rc.first;
+                    int cur_c = current_rc.second;
+
+                    const pcl::PointXYZINormal* pt_normal = obstacle_grid[cur_r][cur_c];
+                    if (pt_normal) { // Should always be true if temp_valid_mask is 1
+                        // Add point to current cluster
+                        pcl::PointXYZI pt_xyzi;
+                        pt_xyzi.x = pt_normal->x;
+                        pt_xyzi.y = pt_normal->y;
+                        pt_xyzi.z = pt_normal->z;
+                        pt_xyzi.intensity = current_intensity;
+                        current_cluster_xyzi->points.push_back(pt_xyzi);
+
+                        rings_in_cluster.insert(cur_r); // Ring is the row index
+                        min_z_cluster = std::min(min_z_cluster, pt_xyzi.z);
+                        max_z_cluster = std::max(max_z_cluster, pt_xyzi.z);
+                    }
+
+                    // Explore neighbors
+                    for (int i = 0; i < 8; ++i) {
+                        int next_r = cur_r + dr[i];
+                        int next_c = (cur_c + dc[i] + num_sectors) % num_sectors; // Handle circular wrap-around for columns
+
+                        if (next_r >= 0 && next_r < num_rings &&
+                            temp_valid_mask.at<uint8_t>(next_r, next_c) == 1 && // Use temp_valid_mask
+                            visited_mask.at<uint8_t>(next_r, next_c) == 0) {
+                            
+                            q.push({next_r, next_c});
+                            visited_mask.at<uint8_t>(next_r, next_c) = 1;
+                        }
+                    }
+                }
+
+                // Filter clusters based on the number of rings spanned AND Z-difference
+                if (current_cluster_xyzi->points.size() >= 20 && rings_in_cluster.size() >= 2 && (max_z_cluster - min_z_cluster) > min_cluster_z_difference_) {
+                    *clustered_obstacles += *current_cluster_xyzi;
+                    current_intensity += 10.0f;
+                }
+            }
         }
     }
     
@@ -150,6 +253,79 @@ void RangeImageObstacleDetector::buildRangeImage(pcl::PointCloud<pcl::PointXYZIN
     }
 }
 
+// pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGroundByNormal() {
+//     // use row + 1 (larger ring is lower, from ground to top, in case ring 6 at one obstacle and ring 7 at another obstacle, miss the highest obstacle ring) 
+//     // by default, unless last ring
+    
+//     pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info(
+//         new pcl::PointCloud<pcl::PointXYZINormal>);
+    
+//     for (int row = 0; row < num_rings; ++row) {
+//         for (int col = 0; col < num_sectors; ++col) {
+            
+//             if (!valid_mask_.at<uint8_t>(row, col)) continue;
+
+//             float x = x_image_.at<float>(row, col);
+//             float y = y_image_.at<float>(row, col);
+//             float z = z_image_.at<float>(row, col);
+            
+//             bool z_trend_condition = false;
+//             bool neighbors_valid = false;
+//             float slope_threshold = 1.0f; // 45 degree
+
+//             if (row == num_rings - 1) { // Special case for the last ring (lowest)
+//                 if (valid_mask_.at<uint8_t>(row - 1, col)) {
+//                     neighbors_valid = true;
+//                     float z_current = z_image_.at<float>(row, col);
+//                     float x_prev = x_image_.at<float>(row - 1, col);
+//                     float y_prev = y_image_.at<float>(row - 1, col);
+//                     float z_prev = z_image_.at<float>(row - 1, col);
+
+//                     float dz_prev = z_prev - z_current; // Previous is higher than current
+//                     float dx_prev = x_prev - x;
+//                     float dy_prev = y_prev - y;
+//                     float d_xy_prev = std::sqrt(dx_prev*dx_prev + dy_prev*dy_prev);
+//                     z_trend_condition = (dz_prev > (d_xy_prev * slope_threshold));
+//                 }
+//             }
+//             else {
+//                 if (valid_mask_.at<uint8_t>(row + 1, col)) {
+//                     neighbors_valid = true;
+//                     float z_current = z_image_.at<float>(row, col);
+//                     float x_next = x_image_.at<float>(row + 1, col);
+//                     float y_next = y_image_.at<float>(row + 1, col);
+//                     float z_next = z_image_.at<float>(row + 1, col);
+
+//                     float dz_next = z_current - z_next; // Current is higher than next
+//                     float dx_next = x - x_next;
+//                     float dy_next = y - y_next;
+//                     float d_xy_next = std::sqrt(dx_next*dx_next + dy_next*dy_next);
+//                     z_trend_condition = (dz_next > (d_xy_next * slope_threshold));
+//                 }
+//             }
+
+//             if (!neighbors_valid) {
+//                 continue; // Skip if required surrounding points are not valid
+//             }
+                
+//             Eigen::Vector3f normal = computeNormal(row, col);
+            
+//             float normal_z_threshold = 0.7f;
+//             if (std::abs(normal.z()) < normal_z_threshold && z_trend_condition) {
+//                 pcl::PointXYZINormal obstacle_pt;
+//                 obstacle_pt.x = x;
+//                 obstacle_pt.y = y;
+//                 obstacle_pt.z = z;
+//                 obstacle_pt.normal_x = static_cast<float>(row); // Store ring in normal_x
+//                 // Other normal_y, normal_z, intensity, curvature can be set as needed
+//                 obstacles_with_normal_info->points.push_back(obstacle_pt);
+//             }
+//         }
+//     }
+    
+//     return obstacles_with_normal_info;
+// }
+
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGroundByNormal() {
     // use row + 1 (larger ring is lower, from ground to top, in case ring 6 at one obstacle and ring 7 at another obstacle, miss the highest obstacle ring) 
     // by default, unless last ring
@@ -158,7 +334,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGr
         new pcl::PointCloud<pcl::PointXYZINormal>);
     
     for (int row = 0; row < num_rings; ++row) {
-        for (int col = 1; col < num_sectors - 1; ++col) {
+        for (int col = 0; col < num_sectors; ++col) {
             
             if (!valid_mask_.at<uint8_t>(row, col)) continue;
 
@@ -167,12 +343,10 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGr
             float z = z_image_.at<float>(row, col);
             
             bool z_trend_condition = false;
-            bool neighbors_valid = false;
             float slope_threshold = 1.0f; // 45 degree
 
             if (row == num_rings - 1) { // Special case for the last ring (lowest)
                 if (valid_mask_.at<uint8_t>(row - 1, col)) {
-                    neighbors_valid = true;
                     float z_current = z_image_.at<float>(row, col);
                     float x_prev = x_image_.at<float>(row - 1, col);
                     float y_prev = y_image_.at<float>(row - 1, col);
@@ -187,7 +361,6 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGr
             }
             else {
                 if (valid_mask_.at<uint8_t>(row + 1, col)) {
-                    neighbors_valid = true;
                     float z_current = z_image_.at<float>(row, col);
                     float x_next = x_image_.at<float>(row + 1, col);
                     float y_next = y_image_.at<float>(row + 1, col);
@@ -200,10 +373,6 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGr
                     z_trend_condition = (dz_next > (d_xy_next * slope_threshold));
                 }
             }
-
-            if (!neighbors_valid) {
-                continue; // Skip if required surrounding points are not valid
-            }
                 
             Eigen::Vector3f normal = computeNormal(row, col);
             
@@ -213,7 +382,9 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGr
                 obstacle_pt.x = x;
                 obstacle_pt.y = y;
                 obstacle_pt.z = z;
-                obstacle_pt.normal_x = static_cast<float>(row); // Store ring in normal_x
+                obstacle_pt.normal_x = static_cast<float>(row);
+                obstacle_pt.normal_y = static_cast<float>(col);
+                obstacle_pt.normal_z = normal.z();
                 // Other normal_y, normal_z, intensity, curvature can be set as needed
                 obstacles_with_normal_info->points.push_back(obstacle_pt);
             }
