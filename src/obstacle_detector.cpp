@@ -18,7 +18,11 @@
 RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_sectors, 
                                float max_distance, float min_cluster_z_difference)
     : num_rings(num_rings), num_sectors(num_sectors), max_distance(max_distance),
-      min_cluster_z_difference_(min_cluster_z_difference) {
+      min_cluster_z_difference_(min_cluster_z_difference),
+      obstacle_grid_flat_(num_rings * num_sectors, nullptr), // Initialize flattened grid
+      temp_valid_mask_(num_rings, num_sectors, CV_8UC1, cv::Scalar(0)), // Initialize temp valid mask
+      visited_mask_(num_rings, num_sectors, CV_8UC1, cv::Scalar(0)) // Initialize visited mask
+{
     
     range_image_ = cv::Mat(num_rings, num_sectors, CV_32FC1, 
                            cv::Scalar(std::numeric_limits<float>::max()));
@@ -113,22 +117,22 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterConnecti
         return clustered_obstacles;
     }
 
-    // Create a temporary 2D grid to map (row, col) to points in obstacles_with_normal_info
-    // Initialize with nullptr or a special value indicating no point
-    std::vector<std::vector<const pcl::PointXYZINormal*>> obstacle_grid(num_rings, std::vector<const pcl::PointXYZINormal*>(num_sectors, nullptr));
-    cv::Mat temp_valid_mask = cv::Mat::zeros(num_rings, num_sectors, CV_8UC1);
+    // Clear and reset member variables for current frame
+    std::fill(obstacle_grid_flat_.begin(), obstacle_grid_flat_.end(), nullptr); // Reset all pointers to nullptr
+    temp_valid_mask_.setTo(0); // Reset all values to 0
 
     for (const auto& pt : obstacles_with_normal_info->points) {
-        uint16_t ring = static_cast<uint16_t>(pt.normal_x);
-        int col = static_cast<int>(pt.normal_y);
+        uint16_t ring = static_cast<uint16_t>(pt.normal_x); // Retrieve ring (row)
+        int col = static_cast<int>(pt.normal_y); // Directly use normal_y as col
 
         if (ring < num_rings && col >= 0 && col < num_sectors) {
-            obstacle_grid[ring][col] = &pt;
-            temp_valid_mask.at<uint8_t>(ring, col) = 1;
+            int flat_idx = ring * num_sectors + col;
+            obstacle_grid_flat_[flat_idx] = &pt;
+            temp_valid_mask_.at<uint8_t>(ring, col) = 1;
         }
     }
 
-    cv::Mat visited_mask = cv::Mat::zeros(num_rings, num_sectors, CV_8UC1);
+    visited_mask_.setTo(0); // Reset visited mask for current frame
     float current_intensity = 0.0f;
 
     // Define 8-connectivity neighbors (dr, dc)
@@ -137,7 +141,7 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterConnecti
 
     for (int r = 0; r < num_rings; ++r) {
         for (int c = 0; c < num_sectors; ++c) {
-            if (temp_valid_mask.at<uint8_t>(r, c) == 1 && visited_mask.at<uint8_t>(r, c) == 0) {
+            if (temp_valid_mask_.at<uint8_t>(r, c) == 1 && visited_mask_.at<uint8_t>(r, c) == 0) {
                 // Start a new cluster
                 pcl::PointCloud<pcl::PointXYZI>::Ptr current_cluster_xyzi(new pcl::PointCloud<pcl::PointXYZI>);
                 std::set<uint16_t> rings_in_cluster;
@@ -146,7 +150,7 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterConnecti
 
                 std::queue<std::pair<int, int>> q;
                 q.push({r, c});
-                visited_mask.at<uint8_t>(r, c) = 1;
+                visited_mask_.at<uint8_t>(r, c) = 1;
 
                 while (!q.empty()) {
                     std::pair<int, int> current_rc = q.front();
@@ -154,7 +158,8 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterConnecti
                     int cur_r = current_rc.first;
                     int cur_c = current_rc.second;
 
-                    const pcl::PointXYZINormal* pt_normal = obstacle_grid[cur_r][cur_c];
+                    int flat_idx = cur_r * num_sectors + cur_c;
+                    const pcl::PointXYZINormal* pt_normal = obstacle_grid_flat_[flat_idx];
                     if (pt_normal) { // Should always be true if temp_valid_mask is 1
                         // Add point to current cluster
                         pcl::PointXYZI pt_xyzi;
@@ -175,11 +180,11 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr RangeImageObstacleDetector::clusterConnecti
                         int next_c = (cur_c + dc[i] + num_sectors) % num_sectors; // Handle circular wrap-around for columns
 
                         if (next_r >= 0 && next_r < num_rings &&
-                            temp_valid_mask.at<uint8_t>(next_r, next_c) == 1 && // Use temp_valid_mask
-                            visited_mask.at<uint8_t>(next_r, next_c) == 0) {
+                            temp_valid_mask_.at<uint8_t>(next_r, next_c) == 1 && // Use temp_valid_mask_
+                            visited_mask_.at<uint8_t>(next_r, next_c) == 0) {
                             
                             q.push({next_r, next_c});
-                            visited_mask.at<uint8_t>(next_r, next_c) = 1;
+                            visited_mask_.at<uint8_t>(next_r, next_c) = 1;
                         }
                     }
                 }

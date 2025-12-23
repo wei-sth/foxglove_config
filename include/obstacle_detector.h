@@ -57,6 +57,9 @@ private:
     cv::Mat y_image_;
     cv::Mat z_image_;
     cv::Mat valid_mask_;
+    std::vector<const pcl::PointXYZINormal*> obstacle_grid_flat_;
+    cv::Mat temp_valid_mask_;
+    cv::Mat visited_mask_;
     
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr filterByDistance(pcl::PointCloud<PointXYZIRT>::Ptr cloud);
     void buildRangeImage(pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud);
