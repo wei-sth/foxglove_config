@@ -638,6 +638,31 @@ void RangeImageObstacleDetector::saveRotatedBoundingBoxesToObj(
         return;
     }
 
+    // Generate MTL file path
+    std::string mtl_file_path = file_path;
+    size_t dot_pos = mtl_file_path.find_last_of('.');
+    if (dot_pos != std::string::npos) {
+        mtl_file_path = mtl_file_path.substr(0, dot_pos);
+    }
+    mtl_file_path += ".mtl";
+
+    // Write MTL file
+    std::ofstream mtl_file(mtl_file_path);
+    if (!mtl_file.is_open()) {
+        std::cerr << "Error: Could not open MTL file for writing: " << mtl_file_path << std::endl;
+        obj_file.close();
+        return;
+    }
+
+    // Define a transparent green material
+    mtl_file << "newmtl transparent_green" << std::endl;
+    mtl_file << "Kd 0.0 1.0 0.0" << std::endl; // Diffuse color (green)
+    mtl_file << "d 0.3" << std::endl;         // alpha value (transparency)
+    mtl_file.close();
+
+    // Link MTL file in OBJ
+    obj_file << "mtllib " << mtl_file_path.substr(mtl_file_path.find_last_of('/') + 1) << std::endl;
+
     int vertex_offset = 0; // To keep track of vertex indices for multiple boxes
 
     for (size_t i = 0; i < rotated_bboxes.size(); ++i) {
@@ -668,6 +693,7 @@ void RangeImageObstacleDetector::saveRotatedBoundingBoxesToObj(
         Eigen::Vector3f center_eigen(rbbox.center.x, rbbox.center.y, rbbox.center.z);
 
         obj_file << "o BoundingBox_" << i << std::endl; // Object name
+        obj_file << "usemtl transparent_green" << std::endl; // Assign material
 
         // Write vertices
         for (const auto& lc : local_corners) {

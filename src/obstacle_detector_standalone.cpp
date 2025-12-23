@@ -53,8 +53,8 @@ int main(int argc, char * argv[]) {
 
     // Save bounding boxes to OBJ file for CloudCompare visualization
     std::string bbox_obj_path = "/home/weizh/data/obstacle_bboxes.obj";
-    detector.saveRotatedBoundingBoxesToObj(rotated_bboxes, bbox_obj_path);
-    std::cout << "Rotated bounding boxes saved to " << bbox_obj_path << std::endl;
+    detector.saveRotatedBoundingBoxesToObj(rotated_bboxes, bbox_obj_path); // Now generates MTL with transparency
+    std::cout << "Rotated bounding boxes saved to " << bbox_obj_path << " (with transparency via MTL)" << std::endl;
 
     // Optionally save obstacles to PCD for visualization
     // Concatenate all clusters into a single point cloud for saving
