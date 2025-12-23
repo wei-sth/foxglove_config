@@ -59,7 +59,8 @@ private:
     
 public:
     cv::Mat visualizeRangeImage();
-    cv::Mat visualizeNormals();
+    void visualizeNormals(const std::string& path);
+    void saveNormalsToPCD(const std::string& path);
 };
 
 std::vector<BoundingBox> getObstacleBoundingBoxes(

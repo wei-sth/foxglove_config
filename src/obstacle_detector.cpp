@@ -1,9 +1,17 @@
+#include <pcl/io/pcd_io.h>
 #include "/home/weizh/foxglove_ws/src/foxglove_config/include/obstacle_detector.h"
 
 #include <pcl/filters/passthrough.h>
 #include <pcl/segmentation/extract_clusters.h>
 #include <algorithm>
+#include <iostream> // For std::cout
 
+// ring index = row index
+// note xt16, ring 15 is the lowest, ring 0 is the highest, ring 15 and ring 14 angle difference is 2 degree
+// due to beam divergence, the further from lidar (assume r is distance), the larger vertical distance between rings, 
+// delta_z = r * tan(2 degree) = r * 0.0349
+// so if r = 2.0, even for a vertical wall, the vertical distance would be less than 0.07, 
+// but if r=20.0, for a slope, the vertical distance between rings might easily exceed 0.2m
 RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_sectors, 
                                float max_distance, float min_cluster_z_difference)
     : num_rings(num_rings), num_sectors(num_sectors), max_distance(max_distance),
@@ -108,7 +116,8 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByD
 }
 
 void RangeImageObstacleDetector::buildRangeImage(pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud) {
-    
+    // since we use min range, must filter out ego cloud first
+
     range_image_.setTo(std::numeric_limits<float>::max());
     x_image_.setTo(0);
     y_image_.setTo(0);
@@ -140,24 +149,64 @@ void RangeImageObstacleDetector::buildRangeImage(pcl::PointCloud<pcl::PointXYZIN
 }
 
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGroundByNormal() {
+    // use row + 1 (larger ring is lower, from ground to top, in case ring 6 at one obstacle and ring 7 at another obstacle, miss the highest obstacle ring) 
+    // by default, unless last ring
     
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info(
         new pcl::PointCloud<pcl::PointXYZINormal>);
     
-    for (int row = 1; row < num_rings - 1; ++row) {
+    for (int row = 0; row < num_rings; ++row) {
         for (int col = 1; col < num_sectors - 1; ++col) {
             
             if (!valid_mask_.at<uint8_t>(row, col)) continue;
-            
+
             float x = x_image_.at<float>(row, col);
             float y = y_image_.at<float>(row, col);
             float z = z_image_.at<float>(row, col);
             
+            bool z_trend_condition = false;
+            bool neighbors_valid = false;
+            float slope_threshold = 1.0f; // 45 degree
+
+            if (row == num_rings - 1) { // Special case for the last ring (lowest)
+                if (valid_mask_.at<uint8_t>(row - 1, col)) {
+                    neighbors_valid = true;
+                    float z_current = z_image_.at<float>(row, col);
+                    float x_prev = x_image_.at<float>(row - 1, col);
+                    float y_prev = y_image_.at<float>(row - 1, col);
+                    float z_prev = z_image_.at<float>(row - 1, col);
+
+                    float dz_prev = z_prev - z_current; // Previous is higher than current
+                    float dx_prev = x_prev - x;
+                    float dy_prev = y_prev - y;
+                    float d_xy_prev = std::sqrt(dx_prev*dx_prev + dy_prev*dy_prev);
+                    z_trend_condition = (dz_prev > (d_xy_prev * slope_threshold));
+                }
+            }
+            else {
+                if (valid_mask_.at<uint8_t>(row + 1, col)) {
+                    neighbors_valid = true;
+                    float z_current = z_image_.at<float>(row, col);
+                    float x_next = x_image_.at<float>(row + 1, col);
+                    float y_next = y_image_.at<float>(row + 1, col);
+                    float z_next = z_image_.at<float>(row + 1, col);
+
+                    float dz_next = z_current - z_next; // Current is higher than next
+                    float dx_next = x - x_next;
+                    float dy_next = y - y_next;
+                    float d_xy_next = std::sqrt(dx_next*dx_next + dy_next*dy_next);
+                    z_trend_condition = (dz_next > (d_xy_next * slope_threshold));
+                }
+            }
+
+            if (!neighbors_valid) {
+                continue; // Skip if required surrounding points are not valid
+            }
+                
             Eigen::Vector3f normal = computeNormal(row, col);
             
             float normal_z_threshold = 0.7f;
-            
-            if (std::abs(normal.z()) < normal_z_threshold) {
+            if (std::abs(normal.z()) < normal_z_threshold && z_trend_condition) {
                 pcl::PointXYZINormal obstacle_pt;
                 obstacle_pt.x = x;
                 obstacle_pt.y = y;
@@ -173,12 +222,11 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGr
 }
 
 Eigen::Vector3f RangeImageObstacleDetector::computeNormal(int row, int col) {
-    
+    // find vertical neighbor, handle boundary, todo: consider handle horizontal boundary?
+    int row_ver = (row < num_rings - 1) ? (row + 1) : (row - 1);
     int col_right = (col + 1) % num_sectors;
-    int row_down = row + 1;
     
-    if (!valid_mask_.at<uint8_t>(row, col_right) || 
-        !valid_mask_.at<uint8_t>(row_down, col)) {
+    if (!valid_mask_.at<uint8_t>(row, col_right) || !valid_mask_.at<uint8_t>(row_ver, col)) {
         return Eigen::Vector3f(0, 0, 1);
     }
     
@@ -190,13 +238,14 @@ Eigen::Vector3f RangeImageObstacleDetector::computeNormal(int row, int col) {
                            y_image_.at<float>(row, col_right),
                            z_image_.at<float>(row, col_right));
     
-    Eigen::Vector3f p_down(x_image_.at<float>(row_down, col),
-                          y_image_.at<float>(row_down, col),
-                          z_image_.at<float>(row_down, col));
+    Eigen::Vector3f p_ver(x_image_.at<float>(row_ver, col),
+                          y_image_.at<float>(row_ver, col),
+                          z_image_.at<float>(row_ver, col));
     
     Eigen::Vector3f v1 = p_right - p;
-    Eigen::Vector3f v2 = p_down - p;
+    Eigen::Vector3f v2 = p_ver - p;
     
+    // discontinuity check, if p is far away (0.5m) from its neighbor, they do not belong to the same object, 0.5 is ok for 10m detector, if further, v2.norm() > 0.5f might need to change
     if (v1.norm() > 0.5f || v2.norm() > 0.5f) {
         return Eigen::Vector3f(0, 0, 1);
     }
@@ -233,7 +282,7 @@ cv::Mat RangeImageObstacleDetector::visualizeRangeImage() {
     return colored;
 }
 
-cv::Mat RangeImageObstacleDetector::visualizeNormals() {
+void RangeImageObstacleDetector::visualizeNormals(const std::string& path) {
     cv::Mat normal_z_image(num_rings, num_sectors, CV_32FC1, cv::Scalar(0));
     
     for (int row = 1; row < num_rings - 1; ++row) {
@@ -250,7 +299,46 @@ cv::Mat RangeImageObstacleDetector::visualizeNormals() {
     
     cv::Mat colored;
     cv::applyColorMap(vis_image, colored, cv::COLORMAP_JET);
-    return colored;
+
+    // Resize the image to a fixed size for better visualization
+    cv::Mat resized_colored;
+    int target_width = 2000; // Fixed target width
+    int target_height = 1000;  // Fixed target height
+    cv::resize(colored, resized_colored, cv::Size(target_width, target_height), 0, 0, cv::INTER_LINEAR);
+
+    cv::imwrite(path, resized_colored);
+}
+
+void RangeImageObstacleDetector::saveNormalsToPCD(const std::string& path) {
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud_with_normals(
+        new pcl::PointCloud<pcl::PointXYZINormal>);
+
+    for (int row = 0; row < num_rings; ++row) {
+        for (int col = 1; col < num_sectors - 1; ++col) {
+            if (!valid_mask_.at<uint8_t>(row, col)) continue;
+
+            float x = x_image_.at<float>(row, col);
+            float y = y_image_.at<float>(row, col);
+            float z = z_image_.at<float>(row, col);
+
+            Eigen::Vector3f normal = computeNormal(row, col);
+
+            pcl::PointXYZINormal pt_normal;
+            pt_normal.x = x;
+            pt_normal.y = y;
+            pt_normal.z = z;
+            pt_normal.normal_x = row; // normal.x()
+            pt_normal.normal_y = col; // normal.y()
+            pt_normal.normal_z = normal.z();
+            pt_normal.intensity = std::abs(normal.z()); // Map abs(normal.z) to intensity for CloudCompare visualization
+            cloud_with_normals->points.push_back(pt_normal);
+        }
+    }
+
+    cloud_with_normals->width = cloud_with_normals->points.size();
+    cloud_with_normals->height = 1;
+    cloud_with_normals->is_dense = true;
+    pcl::io::savePCDFileBinary(path, *cloud_with_normals);
 }
 
 std::vector<BoundingBox> getObstacleBoundingBoxes(
