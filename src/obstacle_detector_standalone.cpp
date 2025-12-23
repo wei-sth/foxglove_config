@@ -13,7 +13,9 @@ int main(int argc, char * argv[]) {
     pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw(
         new pcl::PointCloud<PointXYZIRT>);
     // std::string pcd_file_path = "/home/weizh/data/bag_11261/bag_11261_0_logs/unitree_slam_lidar_points/1764126218_844803835.pcd";
-    std::string pcd_file_path = "/home/weizh/data/bag_11261/bag_11261_0_logs/unitree_slam_lidar_points/1764126144_944283160.pcd";
+    // 1764126140_046829002
+    // 1764126144_944283160
+    std::string pcd_file_path = "/home/weizh/data/bag_11261/bag_11261_0_logs/unitree_slam_lidar_points/1764126140_046829002.pcd";
 
     if (pcl::io::loadPCDFile<PointXYZIRT>(pcd_file_path, *cloud_raw) == -1) {
         PCL_ERROR("Couldn't read file %s \n", pcd_file_path.c_str());
@@ -43,7 +45,7 @@ int main(int argc, char * argv[]) {
     // detector.saveNongroundBeforeClusteringToPCD(nonground_pcd_path);
     // std::cout << "Range image nonground saved to " << nonground_pcd_path << std::endl;
 
-    std::vector<RotatedBoundingBox> rotated_bboxes = detector.getObstacleBoundingBoxesNew(obstacle_clusters);
+    std::vector<RotatedBoundingBox> rotated_bboxes = detector.getObstacleBoundingBoxesNewV2(obstacle_clusters);
     
     std::cout << "Detected " << rotated_bboxes.size() << " rotated bounding boxes:" << std::endl;
     for (const auto& rbbox : rotated_bboxes) {

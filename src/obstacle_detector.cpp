@@ -3,6 +3,8 @@
 
 #include <pcl/filters/passthrough.h>
 #include <pcl/segmentation/extract_clusters.h>
+#include <pcl/features/moment_of_inertia_estimation.h> // Include for pcl::MomentOfInertiaEstimation
+#include <pcl/surface/convex_hull.h> // For pcl::ConvexHull
 #include <algorithm>
 #include <iostream> // For std::cout
 #include <fstream>  // For file operations (OBJ saving)
@@ -660,6 +662,133 @@ std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingB
     }
     
     return rotated_bboxes;
+}
+
+std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingBoxesNewV2(
+    const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
+    
+    std::vector<RotatedBoundingBox> rotated_bboxes;
+    for (const auto& current_cluster : clusters) {
+        if (current_cluster->points.empty()) continue;
+
+        // 1. Extract 2D points (XY plane) and find Z-extents
+        pcl::PointCloud<pcl::PointXYZI>::Ptr cluster_2d(new pcl::PointCloud<pcl::PointXYZI>);
+        float min_z_cluster = std::numeric_limits<float>::max();
+        float max_z_cluster = -std::numeric_limits<float>::max();
+
+        for (const auto& pt : current_cluster->points) {
+            pcl::PointXYZI pt_2d;
+            pt_2d.x = pt.x;
+            pt_2d.y = pt.y;
+            pt_2d.z = 0.0f; // Project to XY plane
+            cluster_2d->points.push_back(pt_2d);
+
+            min_z_cluster = std::min(min_z_cluster, pt.z);
+            max_z_cluster = std::max(max_z_cluster, pt.z);
+        }
+
+        if (cluster_2d->points.size() < 3) { // Need at least 3 points for a convex hull
+            continue;
+        }
+
+        // 2. Compute 2D Convex Hull
+        pcl::PointCloud<pcl::PointXYZI>::Ptr hull_points(new pcl::PointCloud<pcl::PointXYZI>);
+        pcl::ConvexHull<pcl::PointXYZI> ch;
+        ch.setInputCloud(cluster_2d);
+        ch.reconstruct(*hull_points);
+
+        if (hull_points->points.empty()) {
+            continue;
+        }
+
+        // 3. Apply Rotating Calipers to find Minimum Area Rectangle
+        MinAreaRect mar = findMinAreaRect(hull_points);
+
+        // 4. Populate RotatedBoundingBox
+        RotatedBoundingBox rbbox;
+        rbbox.center.x = mar.center.x();
+        rbbox.center.y = mar.center.y();
+        rbbox.center.z = (min_z_cluster + max_z_cluster) / 2.0f; // Midpoint of actual Z range
+        rbbox.width = mar.width;
+        rbbox.height = mar.height;
+        rbbox.angle = mar.angle;
+        rbbox.min_z_point.z = min_z_cluster;
+        rbbox.max_z_point.z = max_z_cluster;
+
+        // Filter by a minimum volume or size if needed
+        float depth = max_z_cluster - min_z_cluster;
+        if (rbbox.width > 0.01 && rbbox.height > 0.01 && depth > 0.01) {
+            rotated_bboxes.push_back(rbbox);
+        }
+    }
+    return rotated_bboxes;
+}
+
+// Helper function to find the minimum area enclosing rectangle using rotating calipers
+MinAreaRect RangeImageObstacleDetector::findMinAreaRect(const pcl::PointCloud<pcl::PointXYZI>::Ptr& hull_points_2d) {
+    MinAreaRect result;
+    result.width = std::numeric_limits<float>::max();
+    result.height = std::numeric_limits<float>::max();
+    result.angle = 0.0f;
+    result.center = Eigen::Vector2f(0.0f, 0.0f);
+
+    if (hull_points_2d->points.size() < 2) {
+        return result;
+    }
+
+    float min_area = std::numeric_limits<float>::max();
+
+    // Iterate through each edge of the convex hull
+    for (size_t i = 0; i < hull_points_2d->points.size(); ++i) {
+        const pcl::PointXYZI& p1 = hull_points_2d->points[i];
+        const pcl::PointXYZI& p2 = hull_points_2d->points[(i + 1) % hull_points_2d->points.size()];
+
+        // Vector representing the edge
+        Eigen::Vector2f edge_vec(p2.x - p1.x, p2.y - p1.y);
+        float edge_length = edge_vec.norm();
+
+        if (edge_length < 1e-6) continue; // Skip degenerate edges
+
+        // Normalize the edge vector to get the orientation
+        edge_vec.normalize();
+
+        // Perpendicular vector
+        Eigen::Vector2f perp_vec(-edge_vec.y(), edge_vec.x());
+
+        // Project all hull points onto the edge vector and its perpendicular
+        float min_proj_edge = std::numeric_limits<float>::max();
+        float max_proj_edge = -std::numeric_limits<float>::max();
+        float min_proj_perp = std::numeric_limits<float>::max();
+        float max_proj_perp = -std::numeric_limits<float>::max();
+
+        for (const auto& pt : hull_points_2d->points) {
+            Eigen::Vector2f current_pt(pt.x, pt.y);
+            float proj_edge = current_pt.dot(edge_vec);
+            float proj_perp = current_pt.dot(perp_vec);
+
+            min_proj_edge = std::min(min_proj_edge, proj_edge);
+            max_proj_edge = std::max(max_proj_edge, proj_edge);
+            min_proj_perp = std::min(min_proj_perp, proj_perp);
+            max_proj_perp = std::max(max_proj_perp, proj_perp);
+        }
+
+        float current_width = max_proj_edge - min_proj_edge;
+        float current_height = max_proj_perp - min_proj_perp;
+        float current_area = current_width * current_height;
+
+        if (current_area < min_area) {
+            min_area = current_area;
+            result.width = current_width;
+            result.height = current_height;
+            result.angle = std::atan2(edge_vec.y(), edge_vec.x());
+
+            // Calculate center of the bounding box
+            Eigen::Vector2f center_on_edge = (min_proj_edge + max_proj_edge) / 2.0f * edge_vec;
+            Eigen::Vector2f center_on_perp = (min_proj_perp + max_proj_perp) / 2.0f * perp_vec;
+            result.center = center_on_edge + center_on_perp;
+        }
+    }
+    return result;
 }
 
 void RangeImageObstacleDetector::saveRotatedBoundingBoxesToObj(

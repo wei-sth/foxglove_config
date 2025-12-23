@@ -4,6 +4,7 @@
 #include <pcl/common/common.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/features/moment_of_inertia_estimation.h> // Include for pcl::MomentOfInertiaEstimation
 #include <opencv2/opencv.hpp>
 #include <vector>
 #include <set>
@@ -37,6 +38,14 @@ struct RotatedBoundingBox {
     float width, height, angle; // angle in radians
     pcl::PointXYZ min_z_point; // Store min_z for the cluster
     pcl::PointXYZ max_z_point; // Store max_z for the cluster
+};
+
+// Helper struct for 2D minimum area rectangle
+struct MinAreaRect {
+    Eigen::Vector2f center;
+    float width;
+    float height;
+    float angle; // Angle in radians
 };
 
 class RangeImageObstacleDetector {
@@ -78,9 +87,15 @@ public:
     std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
         const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
     
+    std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNewV2(
+        const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
+
     void saveRotatedBoundingBoxesToObj(
         const std::vector<RotatedBoundingBox>& rotated_bboxes,
         const std::string& file_path);
+
+    // Helper function for rotating calipers
+    MinAreaRect findMinAreaRect(const pcl::PointCloud<pcl::PointXYZI>::Ptr& hull_points_2d);
 };
 
 #endif // OBSTACLE_DETECTOR_H
