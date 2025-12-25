@@ -25,11 +25,6 @@ int main(int argc, char * argv[]) {
                 << " data points from " << pcd_file_path << std::endl;
     
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters = detector.detectObstacles(cloud_raw);
-    
-    // Call visualizeNormals to save the normal visualization image
-    // std::string normal_image_path = "/home/weizh/data/normal_visualization.png";
-    // detector.visualizeNormals(normal_image_path);
-    // std::cout << "Normal visualization saved to " << normal_image_path << std::endl;
 
     // Save all valid points with their computed normals to a PCD file for 3D visualization
     std::string normals_pcd_path = "/home/weizh/data/range_image_normals.pcd";

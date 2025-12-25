@@ -738,8 +738,6 @@ Eigen::Vector3f RangeImageObstacleDetector::computeNormal(int row, int col) {
     return normal;
 }
 
-// Removed visualizeRangeImage() and visualizeNormals() as they are not explicitly requested to be retained
-
 void RangeImageObstacleDetector::saveNormalsToPCD(const std::string& path) {
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud_with_normals(
         new pcl::PointCloud<pcl::PointXYZINormal>);

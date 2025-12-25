@@ -78,11 +78,7 @@ private:
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clusterConnectivity(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
     
 public:
-    cv::Mat visualizeRangeImage();
-    void visualizeNormals(const std::string& path);
     void saveNormalsToPCD(const std::string& path);
-    std::vector<BoundingBox> getObstacleBoundingBoxes(
-        pcl::PointCloud<pcl::PointXYZI>::Ptr obstacles);
 
     std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
         const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
