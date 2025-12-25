@@ -20,6 +20,10 @@
 // delta_z = r * tan(2 degree) = r * 0.0349
 // so if r = 2.0, even for a vertical wall, the vertical distance would be less than 0.07, 
 // but if r=20.0, for a slope, the vertical distance between rings might easily exceed 0.2m
+// so while doing clustering, need to consider connectivity, also need to consider physical distance:
+// 1. same col, row and row+1, distance is far, but they indeed belong to the same object (pole)
+// 2. same row, col and col+1, distance is far, but they belong to different objects
+
 RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_sectors, 
                                float max_distance, float min_cluster_z_difference)
     : num_rings(num_rings), num_sectors(num_sectors), max_distance(max_distance),
@@ -188,8 +192,20 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::cl
                             temp_valid_mask_.at<uint8_t>(next_r, next_c) == 1 && // Use temp_valid_mask_
                             visited_mask_.at<uint8_t>(next_r, next_c) == 0) {
                             
-                            q.push({next_r, next_c});
-                            visited_mask_.at<uint8_t>(next_r, next_c) = 1;
+                            // Get current point's range (from intensity)
+                            const pcl::PointXYZINormal* current_pt_normal = obstacle_grid_flat_[flat_idx];
+                            float current_range = current_pt_normal ? current_pt_normal->intensity : std::numeric_limits<float>::max();
+
+                            // Get neighbor point's range (from intensity)
+                            int next_flat_idx = next_r * num_sectors + next_c;
+                            const pcl::PointXYZINormal* next_pt_normal = obstacle_grid_flat_[next_flat_idx];
+                            float next_range = next_pt_normal ? next_pt_normal->intensity : std::numeric_limits<float>::max();
+
+                            // Check range difference
+                            if (std::abs(current_range - next_range) <= 0.3f) { // Only cluster if range difference is within 0.3m
+                                q.push({next_r, next_c});
+                                visited_mask_.at<uint8_t>(next_r, next_c) = 1;
+                            }
                         }
                     }
                 }
@@ -395,7 +411,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::segmentGr
                 obstacle_pt.normal_x = static_cast<float>(row);
                 obstacle_pt.normal_y = static_cast<float>(col);
                 obstacle_pt.normal_z = normal.z();
-                // Other normal_y, normal_z, intensity, curvature can be set as needed
+                obstacle_pt.intensity = range_image_.at<float>(row, col);
                 obstacles_with_normal_info->points.push_back(obstacle_pt);
             }
         }
