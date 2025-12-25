@@ -47,7 +47,7 @@ private:
         pcl::fromROSMsg(*msg, *cloud_raw);
 
         std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters = detector_->detectObstacles(cloud_raw);
-        std::vector<RotatedBoundingBox> rotated_bboxes = detector_->getObstacleBoundingBoxesNew(obstacle_clusters);
+        std::vector<RotatedBoundingBox> rotated_bboxes = detector_->getObstacleBoundingBoxesNewV2(obstacle_clusters);
 
         visualization_msgs::msg::MarkerArray marker_array_msg;
 
