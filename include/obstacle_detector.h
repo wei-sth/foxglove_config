@@ -9,6 +9,9 @@
 #include <vector>
 #include <set>
 #include <string>
+#include <Eigen/Dense>
+#include <vector>
+#include <algorithm>
 #include <iostream>
 
 // Original PointXYZIRT definition for reading the PCD file and ROS message
@@ -48,17 +51,49 @@ struct MinAreaRect {
     float angle; // Angle in radians
 };
 
+struct Cell {
+    std::vector<int> point_indices;
+};
+
+class WildTerrainSegmenter {
+public:
+    WildTerrainSegmenter(float max_range);
+
+    // 参数设置
+    int num_rings = 20;       // 距离划分
+    int num_sectors = 36;     // 角度划分 (每10度一格)
+    float max_range;
+    float sensor_height = 0.5; // 传感器安装高度
+    float dist_threshold = 0.12; // 超过12cm视为障碍
+    int num_lpr = 10;         // 每次取最低的10个点作为种子点
+    int num_iter = 3;         // 迭代拟合次数
+
+    void segment(const cv::Mat& range_image, const cv::Mat& x_image, const cv::Mat& y_image, const cv::Mat& z_image, const cv::Mat& valid_mask,
+                 pcl::PointCloud<pcl::PointXYZINormal>::Ptr& ground_cloud,
+                 pcl::PointCloud<pcl::PointXYZINormal>::Ptr& obstacle_cloud);
+
+    void debugSavePolarGrid(const std::vector<std::vector<Cell>>& polar_grid, const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud_in, const std::string& path);
+
+private:
+    // 寻找最低的一组点
+    std::vector<int> extract_seeds(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud, const std::vector<int>& indices);
+
+    // 使用 PCA 拟合平面: ax + by + cz + d = 0
+    void estimate_plane(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud, const std::vector<int>& indices, 
+                        Eigen::Vector3f& normal, float& d);
+};
+
 class RangeImageObstacleDetector {
 public:
     RangeImageObstacleDetector(int num_rings = 16, int num_sectors = 1800, 
-                               float max_distance = 10.0f, float min_cluster_z_difference = 0.1f);
+                               float max_range = 10.0f, float min_cluster_z_difference = 0.1f);
     
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> detectObstacles(pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw);
     
 private:
     int num_rings;
     int num_sectors;
-    float max_distance;
+    float max_range;
     float min_cluster_z_difference_;
     
     cv::Mat range_image_;
@@ -70,13 +105,15 @@ private:
     cv::Mat temp_valid_mask_;
     cv::Mat visited_mask_;
     
-    pcl::PointCloud<pcl::PointXYZINormal>::Ptr filterByDistance(pcl::PointCloud<PointXYZIRT>::Ptr cloud);
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr filterByRangeEgo(pcl::PointCloud<PointXYZIRT>::Ptr cloud);
     void buildRangeImage(pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud);
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr segmentGroundByNormal();
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr segmentGroundByPatchwork();
     Eigen::Vector3f computeNormal(int row, int col);
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clusterEuclidean(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clusterConnectivity(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
     
+    WildTerrainSegmenter wild_terrain_segmenter_;
 public:
     void saveNormalsToPCD(const std::string& path);
 

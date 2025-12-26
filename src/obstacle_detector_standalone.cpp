@@ -15,7 +15,8 @@ int main(int argc, char * argv[]) {
     // std::string pcd_file_path = "/home/weizh/data/bag_11261/bag_11261_0_logs/unitree_slam_lidar_points/1764126218_844803835.pcd";
     // 1764126140_046829002
     // 1764126144_944283160
-    std::string pcd_file_path = "/home/weizh/data/bag_11261/bag_11261_0_logs/unitree_slam_lidar_points/1764126140_046829002.pcd";
+    // 1764126158_346454512
+    std::string pcd_file_path = "/home/weizh/data/bag_11261/bag_11261_0_logs/unitree_slam_lidar_points/1764126158_346454512.pcd";
 
     if (pcl::io::loadPCDFile<PointXYZIRT>(pcd_file_path, *cloud_raw) == -1) {
         PCL_ERROR("Couldn't read file %s \n", pcd_file_path.c_str());
@@ -43,10 +44,10 @@ int main(int argc, char * argv[]) {
     std::vector<RotatedBoundingBox> rotated_bboxes = detector.getObstacleBoundingBoxesNewV2(obstacle_clusters);
     
     std::cout << "Detected " << rotated_bboxes.size() << " rotated bounding boxes:" << std::endl;
-    for (const auto& rbbox : rotated_bboxes) {
-        std::cout << "  Center: (" << rbbox.center.x << ", " << rbbox.center.y << ", " << rbbox.center.z << ")"
-                    << "  Width: " << rbbox.width << ", Height: " << rbbox.height << ", Angle: " << rbbox.angle << std::endl;
-    }
+    // for (const auto& rbbox : rotated_bboxes) {
+    //     std::cout << "  Center: (" << rbbox.center.x << ", " << rbbox.center.y << ", " << rbbox.center.z << ")"
+    //                 << "  Width: " << rbbox.width << ", Height: " << rbbox.height << ", Angle: " << rbbox.angle << std::endl;
+    // }
 
     // Save bounding boxes to OBJ file for CloudCompare visualization
     std::string bbox_obj_path = "/home/weizh/data/obstacle_bboxes.obj";
