@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.8)
 project(foxglove_config)
+set(CMAKE_BUILD_TYPE "Release")  # small_gicp must use Release, or it will be really really slow (100 times more)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -25,6 +26,8 @@ include_directories(
 
 add_executable(obstacle_detector src/obstacle_detector_standalone.cpp src/obstacle_detector.cpp)
 add_executable(obstacle_detector_node src/obstacle_detector_node.cpp src/obstacle_detector.cpp)
+add_executable(test_vgicp src/test_vgicp.cpp)
+
 ament_target_dependencies(obstacle_detector_node
   rclcpp
   sensor_msgs
@@ -40,10 +43,14 @@ target_link_libraries(obstacle_detector_node
   ${PCL_LIBRARIES}
   ${OpenCV_LIBS}
 )
+target_link_libraries(test_vgicp
+  ${PCL_LIBRARIES}
+)
 
 install(TARGETS
   obstacle_detector
   obstacle_detector_node
+  test_vgicp
   DESTINATION lib/${PROJECT_NAME}
 )
 
