@@ -13,10 +13,19 @@ find_package(std_msgs REQUIRED)
 find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclpy REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
+find_package(tf2_eigen REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(visualization_msgs REQUIRED)
+
+set(ros2_lib "rclcpp;rclpy;std_msgs;sensor_msgs;geometry_msgs;nav_msgs;cv_bridge;pcl_msgs;pcl_conversions;visualization_msgs;tf2;tf2_ros;tf2_eigen;tf2_sensor_msgs;tf2_geometry_msgs")
 
 include_directories(
   include
@@ -27,6 +36,7 @@ include_directories(
 add_executable(obstacle_detector src/obstacle_detector_standalone.cpp src/obstacle_detector.cpp)
 add_executable(obstacle_detector_node src/obstacle_detector_node.cpp src/obstacle_detector.cpp)
 add_executable(test_vgicp src/test_vgicp.cpp)
+add_executable(livo src/livo_node.cpp)
 
 ament_target_dependencies(obstacle_detector_node
   rclcpp
@@ -35,6 +45,8 @@ ament_target_dependencies(obstacle_detector_node
   pcl_conversions
   visualization_msgs
 )
+ament_target_dependencies(livo ${ros2_lib})
+
 target_link_libraries(obstacle_detector
   ${PCL_LIBRARIES}
   ${OpenCV_LIBS}
@@ -51,6 +63,7 @@ install(TARGETS
   obstacle_detector
   obstacle_detector_node
   test_vgicp
+  livo
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -64,6 +77,11 @@ install(PROGRAMS
 
 install(DIRECTORY
   launch
+  DESTINATION share/${PROJECT_NAME}/
+)
+
+install(DIRECTORY
+  config
   DESTINATION share/${PROJECT_NAME}/
 )
 

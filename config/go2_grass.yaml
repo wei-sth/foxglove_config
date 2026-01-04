@@ -1,0 +1,113 @@
+/**:
+  ros__parameters:
+    history_policy: "history_keep_last"
+    reliability_policy: "reliability_reliable"
+    
+    # Topics
+    pointCloudTopic: "/unitree/slam_lidar/points"    # Point cloud data
+    imuTopic: "/camera/imu"                         # IMU data, /camera/imu | /utlidar/imu
+    odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
+
+    # Frames
+    lidarFrame: "rslidar"
+    baselinkFrame: "rslidar"
+    odometryFrame: "odom"
+    mapFrame: "map"
+    
+    # Export settings
+    savePCD: true                              # https://github.com/TixiaoShan/LIO-SAM/issues/3
+    savePCDDirectory: "/Downloads/LOAM/"        # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
+    saveCornerMatch: false                       # for debug
+    saveSurfMatch: false                        # for debug
+    saveInitGuess: false                        # for debug
+    debugTimestamp: "1761615602_513863505"
+
+    # Sensor Settings
+    sensor: hesai                              # lidar sensor type, 'velodyne' or 'hesai' or 'livox' or 'robosense', hesai xt16 point cloud time field is rel time in nanosec
+    N_SCAN: 16                                  # number of lidar channel (i.e., Velodyne/Ouster: 16, 32, 64, 128, Livox Horizon: 6)
+    Horizon_SCAN: 2000                          # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000), according to hesai manual, Horizontal FOV: 360°, Horizontal resolution: 0.18° (10 Hz), 360/0.18=2000
+    downsampleRate: 1                           # default: 1. Downsample your data if too many points(line). i.e., 16 = 64 / 4, 16 = 16 / 1
+    point_filter_num: 1                         # default: 3. Downsample your data if too many points(point). e.g., 16: 1, 32: 5, 64: 8
+    lidarMinRange: 0.1                          # default: 1.0, minimum lidar range to be used, when climbing stairs, space is very narrow, do not drop too many feature points
+    lidarMaxRange: 100.0                        # default: 1000.0, maximum lidar range to be used
+
+    # IMU Settings
+    # I also tried to adjust odometryNoise in mapOptimization.cpp(odometryNoise is more direct), does not work, seems most importantly is imu noise, waiting for deeper research
+    imuType: 0                                  # 0: 6-axis  1: 9-axis
+    imuRate: 250.0
+    imuAccNoise: 3.0e-01                        # default:3.9939570888238808e-03  爬楼梯时加速度容易受冲击力的影响，所以平地上静止测出来的noise是不可靠的，建议改成0.1-0.3
+    imuGyrNoise: 1.0e-01                        # default:1.5636343949698187e-03, if rotate randomly(not towards one direction) larger than truth, need to decrease (to trust gyro more)
+    imuAccBiasN: 6.0e-05                        # default:6.4356659353532566e-05
+    imuGyrBiasN: 3.0e-05                        # default:3.5640318696367613e-05, if drift (rotate) towards one direction, need to increase
+    imuGravity: 9.80511
+    imuRPYWeight: 0.01                          # default: 0.01, only used when imuType == 1
+
+    # Extrinsics: T_lb (lidar -> imu)
+
+    # go2 imu and xt16
+    # extrinsicTrans: [0.1710, 0.0, 0.0908]
+    # extrinsicRot: [1.0, 0.0, 0.0,
+    #               0.0, 1.0, 0.0,
+    #               0.0, 0.0, 1.0]
+
+    # camera imu and xt16, imu wrt lidar, used to convert imu to lidar frame, see func imuConverter
+    extrinsicTrans: [-0.07044902, -0.20005446, -0.04310354]
+    extrinsicRot: [-0.99916809, -0.03165129, 0.02572802,
+                   -0.02908526, 0.11062838, -0.99343698,
+                   0.02859719, -0.99335786, -0.11145731]
+
+    # This parameter is set only when the 9-axis IMU is used, but it must be a high-precision IMU. e.g. MTI-680
+    extrinsicRPY: [0.0, -1.0, 0.0,
+                    1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0]
+
+    # LOAM feature threshold
+    edgeThreshold: 1.0
+    surfThreshold: 0.1
+    edgeFeatureMinValidNum: 10
+    surfFeatureMinValidNum: 100
+
+    # voxel filter paprams
+    odometrySurfLeafSize: 0.05                     # default: 0.4 - outdoor, 0.2 - indoor, only used in featureExtraction.cpp, this is the upstream input, must be small enough, otherwise we cannot get accurate result in downstream
+    mappingCornerLeafSize: 0.1                    # default: 0.2 - outdoor, 0.1 - indoor
+    mappingSurfLeafSize: 0.05                       # default: 0.4 - outdoor, 0.2 - indoor, smaller values means more points would search for plane features nearby, if use N_SCAN x Horizon_SCAN data, 0.2 would be too large, need 0.1 to get good result, 0.05 gets better than 0.1
+
+    # robot motion constraint (in case you are using a 2D robot)
+    z_tollerance: 10.0                              # default: 1000.0 meters
+    rotation_tollerance: 1000.0                     # default: 1000.0 radians
+    transSpeedLimit: 1.0                            # m/s, 1.0 and 0.5 not ok, should try 0.3 and 0.3
+    rotSpeedLimit: 0.5                              # radian/s, 1.0 rad = 57.32 degree
+
+    # CPU Params
+    numberOfCores: 4                              # number of cores for mapping optimization
+    mappingProcessInterval: 0.0                  # seconds, regulate mapping frequency
+
+    # Surrounding map
+    keyframeDistortionThreshold1: 0.08         # default: 0.05 meter, min < keyframeDistortionThreshold1, do not add too distored lidar to key frame, 0.1 seems too large
+    keyframeDistortionThreshold2: 0.1          # default: 0.1 meter, median < keyframeDistortionThreshold2, do not add too distored lidar to key frame, 0.1 seems too large
+    surroundingkeyframeAddingDistThreshold: 0.3   # default: 0.5 meters, regulate keyframe adding threshold
+    surroundingkeyframeAddingAngleThreshold: 0.1  # default: 0.2 radians, regulate keyframe adding threshold
+    surroundingKeyframeDensity: 1.0               # default: 2.0 meters, downsample surrounding keyframe poses   
+    surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization (when loop closure disabled)
+    surroundingKeyframeMapLeafSize: 0.05           # default: 0.3, downsample local map point cloud
+
+    # Optimization
+    deskewByImu: true                            # imu deskew seems to be not trustworthy ...
+    scan2MapIter: 50                              # max iter for scan2MapOptimization
+    cornerOptimizationSearchSqDis: 0.5            # meter, default: 1.0, squared distance for kdtree search in surfOptimization(scan2MapOptimization)
+    surfOptimizationSearchSqDis: 0.5              # meter, default: 1.0, squared distance for kdtree search in surfOptimization(scan2MapOptimization)
+
+    # Loop closure
+    loopClosureEnableFlag: false
+    loopClosureFrequency: 1.0                     # Hz, regulate loop closure constraint add frequency
+    surroundingKeyframeSize: 50                   # submap size (when loop closure enabled)
+    historyKeyframeSearchRadius: 15.0             # meters, key frame that is within n meters from current pose will be considerd for loop closure
+    historyKeyframeSearchTimeDiff: 120.0          # seconds, key frame that is n seconds older will be considered for loop closure
+    historyKeyframeSearchNum: 25                  # number of hostory key frames will be fused into a submap for loop closure
+    loopClosureICPSurfLeafSize: 0.1               # default: 0.3, downsample icp point cloud  
+    historyKeyframeFitnessScore: 0.05             # default: 0.3, icp threshold, the smaller the better alignment, decides when to trigger loop closure
+
+    # Visualization
+    globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius
+    globalMapVisualizationPoseDensity: 1.0       # meters, global map visualization keyframe density
+    globalMapVisualizationLeafSize: 0.1           # meters, global map visualization cloud density
