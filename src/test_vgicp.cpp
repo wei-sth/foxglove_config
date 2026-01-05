@@ -2,15 +2,15 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
 #include <pcl/registration/icp.h>
-
 #include <small_gicp/pcl/pcl_registration.hpp>
 #include <small_gicp/pcl/pcl_registration_impl.hpp>
 
-int main(int argc, char** argv) {
+int test_single() {
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_in(new pcl::PointCloud<pcl::PointXYZRGB>);
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_target(new pcl::PointCloud<pcl::PointXYZRGB>);
 
-    std::string cloud_in_path = "/home/weizh/fast_livo_ws/src/FAST-LIVO2/Log/PCD/28.pcd";
+    //28 | 699 | 700
+    std::string cloud_in_path = "/home/weizh/fast_livo_ws/src/FAST-LIVO2/Log/PCD/699.pcd";
     std::string cloud_target_path = "/home/weizh/fast_livo_ws/src/FAST-LIVO2/Log/PCD/300.pcd";
     std::string output_path = "/home/weizh/data/aligned_cloud_vgicp.pcd"; // Output path for aligned cloud
 
@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
     vgicp.setVoxelResolution(1.0); // Voxel grid resolution
     vgicp.setNumThreads(4);   // Number of threads for parallel computation
     vgicp.setMaxCorrespondenceDistance(1.0); // Max correspondence distance
+    vgicp.setNumNeighborsForCovariance(40);  // 20 seems too small for original xt16 (56350 points per scan), 40 is OK
     vgicp.setMaximumIterations(100); // Max number of ICP iterations
 
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_aligned(new pcl::PointCloud<pcl::PointXYZRGB>);
@@ -54,7 +55,12 @@ int main(int argc, char** argv) {
         std::cout << "Saved aligned cloud to " << output_path << std::endl;
     } else {
         std::cerr << "\nVGICP did not converge." << std::endl;
+        pcl::io::savePCDFileBinary(output_path, *cloud_aligned);
     }
 
     return 0;
+}
+
+int main(int argc, char** argv) {
+    return test_single();
 }
