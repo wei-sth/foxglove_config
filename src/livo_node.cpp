@@ -1,14 +1,12 @@
 #include "livo_node.h"
 
 LivoNode::LivoNode(const rclcpp::NodeOptions & options) : ParamServer("livo", options) {
-    // 1. 初始化订阅者 (使用 SensorDataQoS 减少延迟)
-    auto qos = rclcpp::SensorDataQoS();
-    
-    // 使用 ParamServer 中的 topic 参数
-    sub_imu = create_subscription<sensor_msgs::msg::Imu>(
-        imuTopic, qos, std::bind(&LivoNode::imuHandler, this, std::placeholders::_1));
-    sub_lidar = create_subscription<sensor_msgs::msg::PointCloud2>(
-        pointCloudTopic, qos, std::bind(&LivoNode::lidarHandler, this, std::placeholders::_1));
+    sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic,
+        rclcpp::QoS(rclcpp::KeepLast(10000)).reliable(),
+        std::bind(&LivoNode::imuHandler, this, std::placeholders::_1));
+    sub_lidar = create_subscription<sensor_msgs::msg::PointCloud2>(pointCloudTopic,
+        rclcpp::QoS(rclcpp::KeepLast(10000)).reliable(),
+        std::bind(&LivoNode::lidarHandler, this, std::placeholders::_1));
 
     RCLCPP_INFO(get_logger(), "Subscribed to IMU topic: %s", imuTopic.c_str());
     RCLCPP_INFO(get_logger(), "Subscribed to Lidar topic: %s", pointCloudTopic.c_str());
@@ -17,11 +15,7 @@ LivoNode::LivoNode(const rclcpp::NodeOptions & options) : ParamServer("livo", op
     local_map.reset(new pcl::PointCloud<PointType>());
     last_laser_cloud_in.reset(new pcl::PointCloud<PointType>());
 
-    // 初始化发布者
-    // IMU: 高频、小包、绝不能丢
-    // auto qos_imu = rclcpp::QoS(rclcpp::KeepLast(200)).best_effort().durability_volatile();
-    // // Lidar: 低频、大包、实时优先
-    // auto qos_lidar = rclcpp::QoS(rclcpp::KeepLast(2)).best_effort().durability_volatile();
+    // publisher
     auto qos_reliable = rclcpp::QoS(10).reliable();
     pub_odom = create_publisher<nav_msgs::msg::Odometry>("/livo/odometry", qos_reliable);
     pub_cloud_registered = create_publisher<sensor_msgs::msg::PointCloud2>("/livo/cloud_registered", qos_reliable);
@@ -42,12 +36,31 @@ LivoNode::~LivoNode() {
     }
 }
 
-// --- 回调函数：只负责存数据，不计算 ---
 void LivoNode::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg) {
-    std::lock_guard<std::mutex> lock(mtx_buffer);
-    imu_buffer.push_back(msg);
-    // IMU 通常不触发唤醒，由点云触发
+    // use logic in fast-livo2, if msg timestamp < last_timestamp_imu, drop this msg, in this way, imu_buffer is sorted
+    double timestamp = rclcpp::Time(msg->header.stamp).seconds();
+    // lock block
+    {
+        std::lock_guard<std::mutex> lock(mtx_buffer);
+        if (last_timestamp_imu > 0.0 && timestamp < last_timestamp_imu)
+        {
+            RCLCPP_ERROR(get_logger(), "imu loop back, offset: %lf \n", last_timestamp_imu - timestamp); // if happens a lot, move out of lock
+            return;
+        }
+        if (last_timestamp_imu > 0.0 && timestamp > last_timestamp_imu + 0.2)
+        {
+            RCLCPP_WARN(get_logger(), "imu time stamp jumps %0.4lf seconds \n", timestamp - last_timestamp_imu);
+            return;
+        }
+
+        last_timestamp_imu = timestamp;
+        imu_buffer.push_back(msg);
+        // imu do not notify, let lidarHandler notify
+    }
 }
+
+// check imu_prop_callback function in fast-livo2, if speed = 20km/h, 100 ms means 0.55m, for obstacle detection, we need real time pose
+// we should based on the pose optimized by last lidar align, calculate relative movement from imu
 
 void LivoNode::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     // 1. 在回调中直接转换格式 (并行化优化)
@@ -70,13 +83,11 @@ void LivoNode::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) 
         dst.normal_x = p.ring;   // 将 ring 存入 normal_x
         dst.normal_y = p.time * 1e-9;   // 将相对时间 time 存入 normal_y, ns -> s
 
-        // 转换到 IMU 坐标系
         dst = lidarToImu(dst);
 
         data.cloud->push_back(dst);
     }
 
-    // 2. 存入缓冲区
     std::lock_guard<std::mutex> lock(mtx_buffer);
     lidar_buffer.push_back(data);
     cv_data.notify_one(); // 唤醒算法线程
@@ -103,7 +114,6 @@ void LivoNode::slamProcessLoop() {
             imu_buffer.pop_front();
         }
 
-        // 2. 顺序执行算法 (逻辑清晰，易于 Debug)
         laser_cloud_in = current_lidar_data.cloud;
 
         processIMU(current_imus);       // IMU 预积分
@@ -118,7 +128,6 @@ void LivoNode::slamProcessLoop() {
 
 void LivoNode::processIMU(const std::vector<sensor_msgs::msg::Imu::SharedPtr>& imus) {
     for (const auto& imu_msg : imus) {
-        // 直接使用原始 IMU 数据，因为所有计算都基于 IMU 坐标系
         imu_que_opt.push_back(*imu_msg);
     }
 

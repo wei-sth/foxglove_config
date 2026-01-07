@@ -70,6 +70,7 @@ private:
     
     double scan_beg_time;
     double scan_end_time;
+    double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0, last_timestamp_img = -1.0;
 
     float imu_rot_x[2000];
     float imu_rot_y[2000];

@@ -438,6 +438,19 @@ double ROS_TIME(T msg)
     return rclcpp::Time(msg).seconds();
 }
 
+inline double stamp2Sec(const builtin_interfaces::msg::Time& stamp)
+{
+    return rclcpp::Time(stamp).seconds();
+}
+
+inline rclcpp::Time sec2Stamp(double timestamp)
+{
+  int32_t sec = std::floor(timestamp);
+  auto nanosec_d = (timestamp - std::floor(timestamp)) * 1e9;
+  uint32_t nanosec = nanosec_d;
+  return rclcpp::Time(sec, nanosec);
+}
+
 
 template<typename T>
 void imuAngular2rosAngular(sensor_msgs::msg::Imu *thisImuMsg, T *angular_x, T *angular_y, T *angular_z)
