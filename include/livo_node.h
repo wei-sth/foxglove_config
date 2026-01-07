@@ -60,6 +60,7 @@ private:
     void findRotation(double relTime, float *rotXCur, float *rotYCur, float *rotZCur);
     void findPosition(double relTime, float *posXCur, float *posYCur, float *posZCur);
     void deskewPoint(PointType *point, double relTime);
+    PointType lidarToImu(const PointType& p);
 
     // --- Data for processing ---
     sensor_msgs::msg::PointCloud2::SharedPtr current_lidar_msg;

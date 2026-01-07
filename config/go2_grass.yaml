@@ -9,8 +9,7 @@
     odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
 
     # Frames
-    lidarFrame: "rslidar"
-    baselinkFrame: "rslidar"
+    bodyFrame: "imu_link"                   # lidar points are converted to imu
     odometryFrame: "odom"
     mapFrame: "map"
     
@@ -42,19 +41,11 @@
     imuGravity: 9.80511
     imuRPYWeight: 0.01                          # default: 0.01, only used when imuType == 1
 
-    # Extrinsics: T_lb (lidar -> imu)
-
-    # go2 imu and xt16
-    # extrinsicTrans: [0.1710, 0.0, 0.0908]
-    # extrinsicRot: [1.0, 0.0, 0.0,
-    #               0.0, 1.0, 0.0,
-    #               0.0, 0.0, 1.0]
-
-    # camera imu and xt16, imu wrt lidar, used to convert imu to lidar frame, see func imuConverter
-    extrinsicTrans: [-0.07044902, -0.20005446, -0.04310354]
-    extrinsicRot: [-0.99916809, -0.03165129, 0.02572802,
-                   -0.02908526, 0.11062838, -0.99343698,
-                   0.02859719, -0.99335786, -0.11145731]
+    # camera imu and xt16, lidar wrt imu, used to convert lidar to imu frame, different from liosam
+    extrinsicTrans: [-0.07497628, -0.02291526, -0.20173281]
+    extrinsicRot: [-0.99916747, -0.02908486, 0.02859728,
+                   -0.03165123, 0.11062869, -0.99335754,
+                   0.02572838, -0.99343532, -0.11145679]
 
     # This parameter is set only when the 9-axis IMU is used, but it must be a high-precision IMU. e.g. MTI-680
     extrinsicRPY: [0.0, -1.0, 0.0,

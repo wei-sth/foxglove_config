@@ -101,8 +101,7 @@ public:
     string odomTopic;
 
     //Frames
-    string lidarFrame;
-    string baselinkFrame;
+    string bodyFrame;
     string odometryFrame;
     string mapFrame;
 
@@ -205,10 +204,8 @@ public:
         declare_parameter<string>("odomTopic", "/odometry/imu");
         get_parameter("odomTopic", odomTopic);
 
-        declare_parameter<string>("lidarFrame", "base_link");
-        get_parameter("lidarFrame", lidarFrame);
-        declare_parameter<string>("baselinkFrame", "base_link");
-        get_parameter("baselinkFrame", baselinkFrame);
+        declare_parameter<string>("bodyFrame", "base_link");
+        get_parameter("bodyFrame", bodyFrame);
         declare_parameter<string>("odometryFrame", "odom");
         get_parameter("odometryFrame", odometryFrame);
         declare_parameter<string>("mapFrame", "map");

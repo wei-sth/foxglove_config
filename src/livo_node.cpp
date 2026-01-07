@@ -18,10 +18,14 @@ LivoNode::LivoNode(const rclcpp::NodeOptions & options) : ParamServer("livo", op
     last_laser_cloud_in.reset(new pcl::PointCloud<PointType>());
 
     // 初始化发布者
+    // IMU: 高频、小包、绝不能丢
+    // auto qos_imu = rclcpp::QoS(rclcpp::KeepLast(200)).best_effort().durability_volatile();
+    // // Lidar: 低频、大包、实时优先
+    // auto qos_lidar = rclcpp::QoS(rclcpp::KeepLast(2)).best_effort().durability_volatile();
     auto qos_reliable = rclcpp::QoS(10).reliable();
-    pub_odom = create_publisher<nav_msgs::msg::Odometry>("/odometry/imu", qos_reliable);
-    pub_cloud_registered = create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", qos_reliable);
-    pub_local_map = create_publisher<sensor_msgs::msg::PointCloud2>("/local_map", qos_reliable);
+    pub_odom = create_publisher<nav_msgs::msg::Odometry>("/livo/odometry", qos_reliable);
+    pub_cloud_registered = create_publisher<sensor_msgs::msg::PointCloud2>("/livo/cloud_registered", qos_reliable);
+    pub_local_map = create_publisher<sensor_msgs::msg::PointCloud2>("/livo/local_map", qos_reliable);
 
     // 初始化成员变量
     imu_ptr_cur = 0;
@@ -65,6 +69,10 @@ void LivoNode::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) 
         dst.intensity = p.intensity;
         dst.normal_x = p.ring;   // 将 ring 存入 normal_x
         dst.normal_y = p.time * 1e-9;   // 将相对时间 time 存入 normal_y, ns -> s
+
+        // 转换到 IMU 坐标系
+        dst = lidarToImu(dst);
+
         data.cloud->push_back(dst);
     }
 
@@ -110,8 +118,8 @@ void LivoNode::slamProcessLoop() {
 
 void LivoNode::processIMU(const std::vector<sensor_msgs::msg::Imu::SharedPtr>& imus) {
     for (const auto& imu_msg : imus) {
-        sensor_msgs::msg::Imu imu_conv = imuConverter(*imu_msg);
-        imu_que_opt.push_back(imu_conv);
+        // 直接使用原始 IMU 数据，因为所有计算都基于 IMU 坐标系
+        imu_que_opt.push_back(*imu_msg);
     }
 
     if (imu_que_opt.empty()) {
@@ -190,6 +198,16 @@ void LivoNode::deskewPoint(PointType *point, double relTime) {
     point->x = p_deskewed.x();
     point->y = p_deskewed.y();
     point->z = p_deskewed.z();
+}
+
+PointType LivoNode::lidarToImu(const PointType& p) {
+    PointType dst = p;
+    Eigen::Vector3d pt_lidar(p.x, p.y, p.z);
+    Eigen::Vector3d pt_imu = extRot * pt_lidar + extTrans;
+    dst.x = pt_imu.x();
+    dst.y = pt_imu.y();
+    dst.z = pt_imu.z();
+    return dst;
 }
 
 void LivoNode::pointCloudPreprocessing() {
@@ -287,7 +305,7 @@ void LivoNode::publishResult() {
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = rclcpp::Time(static_cast<uint64_t>(scan_end_time * 1e9));
     odom.header.frame_id = odometryFrame;
-    odom.child_frame_id = lidarFrame;
+    odom.child_frame_id = bodyFrame;
 
     Eigen::Matrix3f rot = current_pose.block<3, 3>(0, 0);
     Eigen::Quaternionf q(rot);
