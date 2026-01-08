@@ -1,4 +1,8 @@
 #include "livo_node.h"
+#include <chrono>
+#include <small_gicp/util/downsampling_omp.hpp>
+// downsample by 0.1m does not improve
+// downsample by 0.2m, setNumNeighborsForCovariance(20) from 40 improves
 
 LivoNode::LivoNode(const rclcpp::NodeOptions & options) : ParamServer("livo", options) {
     sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic,
@@ -12,6 +16,7 @@ LivoNode::LivoNode(const rclcpp::NodeOptions & options) : ParamServer("livo", op
     RCLCPP_INFO(get_logger(), "Subscribed to Lidar topic: %s", pointCloudTopic.c_str());
 
     laser_cloud_in.reset(new pcl::PointCloud<PointType>());
+    laser_cloud_in_ds.reset(new pcl::PointCloud<PointType>());
     local_map.reset(new pcl::PointCloud<PointType>());
     last_laser_cloud_in.reset(new pcl::PointCloud<PointType>());
 
@@ -119,16 +124,32 @@ void LivoNode::slamProcessLoop() {
 
         laser_cloud_in = current_lidar_data.cloud;
 
+        auto t1 = std::chrono::steady_clock::now();
         processIMU(current_imus);
+        auto t2 = std::chrono::steady_clock::now();
         pointCloudPreprocessing();
+        auto t3 = std::chrono::steady_clock::now();
         // v0: current scan align to pre scan, use pre pose as initial guess, not good for long duration
         // performOdometer();
         // updateLocalMap();
         // v1: current scan align to local map, only key frame is added to local map
         performOdometer_v1();
+        auto t4 = std::chrono::steady_clock::now();
       
         // 3. 发布结果 (也可以异步发布)
         publishResult();
+        auto t5 = std::chrono::steady_clock::now();
+
+        double d1 = std::chrono::duration<double, std::milli>(t2 - t1).count();
+        double d2 = std::chrono::duration<double, std::milli>(t3 - t2).count();
+        double d3 = std::chrono::duration<double, std::milli>(t4 - t3).count();
+        double d4 = std::chrono::duration<double, std::milli>(t5 - t4).count();
+        double total = d1 + d2 + d3 + d4;
+
+        if (total > 0) {
+            RCLCPP_INFO(get_logger(), "Time stats: IMU: %.2f%%, Preprocess: %.2f%%, Odom: %.2f%%, Publish: %.2f%%, Total: %.2f ms",
+                        d1/total*100.0, d2/total*100.0, d3/total*100.0, d4/total*100.0, total);
+        }
     }
 }
 
@@ -226,35 +247,27 @@ PointType LivoNode::lidarToImu(const PointType& p) {
 }
 
 void LivoNode::pointCloudPreprocessing() {
-    // 此时 laser_cloud_in 已经在 slamProcessLoop 中被赋值为预转换好的点云
-
-    // 去畸变
     if (deskewByImu) {
         for (int i = 0; i < (int)laser_cloud_in->size(); ++i) {
             PointType &p = laser_cloud_in->points[i];
-            // 假设 PointType 的 normal_y 存储了相对时间 (relTime)
             double relTime = p.normal_y; 
             deskewPoint(&p, relTime);
         }
     }
 
-    // 先不要降采样
-    // pcl::VoxelGrid<PointType> dsFilter;
-    // dsFilter.setInputCloud(laser_cloud_in);
-    // dsFilter.setLeafSize(odometrySurfLeafSize, odometrySurfLeafSize, odometrySurfLeafSize);
-    // dsFilter.filter(*laser_cloud_in);
+    laser_cloud_in_ds = small_gicp::voxelgrid_sampling_omp(*laser_cloud_in, 0.2);
 }
 
 void LivoNode::performOdometer() {
     if (is_first_frame) {
         // 第一帧：将其变换到世界坐标系并存入 last_laser_cloud_in 作为下一帧的 target
         last_laser_cloud_in->clear();
-        pcl::transformPointCloud(*laser_cloud_in, *last_laser_cloud_in, current_pose);
+        pcl::transformPointCloud(*laser_cloud_in_ds, *last_laser_cloud_in, current_pose);
         is_first_frame = false;
         return;
     }
 
-    if (laser_cloud_in->empty() || last_laser_cloud_in->empty()) return;
+    if (laser_cloud_in_ds->empty() || last_laser_cloud_in->empty()) return;
 
     // 策略：将当前帧（Source）与上一帧配准后的点云（Target）进行配准
     // 局部实例化 VGICP 对象，确保每次配准都是干净的状态，避免 out_of_range 错误
@@ -266,7 +279,7 @@ void LivoNode::performOdometer() {
     vgicp.setNumNeighborsForCovariance(40);
     vgicp.setMaximumIterations(100);
 
-    vgicp.setInputSource(laser_cloud_in);
+    vgicp.setInputSource(laser_cloud_in_ds);
     vgicp.setInputTarget(last_laser_cloud_in);
 
     // 执行配准
@@ -284,37 +297,37 @@ void LivoNode::performOdometer() {
         }
     } catch (const std::out_of_range& e) {
         RCLCPP_ERROR(get_logger(), "VGICP align caught out_of_range: %s. Source size: %zu, Target size: %zu", 
-                     e.what(), laser_cloud_in->size(), last_laser_cloud_in->size());
+                     e.what(), laser_cloud_in_ds->size(), last_laser_cloud_in->size());
     } catch (const std::exception& e) {
         RCLCPP_ERROR(get_logger(), "VGICP align caught exception: %s", e.what());
     }
 
     // 将当前帧配准后的点云存入 last_laser_cloud_in，作为下一帧的 target
     last_laser_cloud_in->clear();
-    pcl::transformPointCloud(*laser_cloud_in, *last_laser_cloud_in, current_pose);
+    pcl::transformPointCloud(*laser_cloud_in_ds, *last_laser_cloud_in, current_pose);
 }
 
 void LivoNode::performOdometer_v1() {
     if (is_first_frame) {
         pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
-        pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
         *local_map += *cloud_world;
         last_key_pose = current_pose;
         is_first_frame = false;
         return;
     }
 
-    if (laser_cloud_in->empty() || local_map->empty()) return;
+    if (laser_cloud_in_ds->empty() || local_map->empty()) return;
 
     small_gicp::RegistrationPCL<PointType, PointType> vgicp;
     vgicp.setRegistrationType("VGICP");
     vgicp.setVoxelResolution(1.0);
     vgicp.setNumThreads(4);
     vgicp.setMaxCorrespondenceDistance(1.0);
-    vgicp.setNumNeighborsForCovariance(40);
+    vgicp.setNumNeighborsForCovariance(20);
     vgicp.setMaximumIterations(100);
 
-    vgicp.setInputSource(laser_cloud_in);
+    vgicp.setInputSource(laser_cloud_in_ds);
     vgicp.setInputTarget(local_map);
 
     pcl::PointCloud<PointType>::Ptr aligned_cloud(new pcl::PointCloud<PointType>());
@@ -340,7 +353,7 @@ void LivoNode::performOdometer_v1() {
 
     if (delta_dist > 0.3 || delta_angle > 10.0) {
         pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
-        pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
         *local_map += *cloud_world;
 
         pcl::VoxelGrid<PointType> dsFilter;
@@ -355,11 +368,11 @@ void LivoNode::performOdometer_v1() {
 }
 
 void LivoNode::updateLocalMap() {
-    if (laser_cloud_in->empty()) return;
+    if (laser_cloud_in_ds->empty()) return;
 
     // 将当前帧转换到世界坐标系
     pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
-    pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
+    pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
 
     // 更新局部地图 (简单叠加，实际应用中可能需要降采样或滑动窗口)
     *local_map += *cloud_world;

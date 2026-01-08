@@ -66,6 +66,7 @@ private:
     // --- Data for processing ---
     sensor_msgs::msg::PointCloud2::SharedPtr current_lidar_msg;
     pcl::PointCloud<PointType>::Ptr laser_cloud_in;
+    pcl::PointCloud<PointType>::Ptr laser_cloud_in_ds;
     
     std::deque<sensor_msgs::msg::Imu> imu_que_opt;
     
