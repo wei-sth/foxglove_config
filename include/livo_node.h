@@ -53,6 +53,7 @@ private:
     void processIMU(const std::vector<sensor_msgs::msg::Imu::SharedPtr>& imus);
     void pointCloudPreprocessing();
     void performOdometer();
+    void performOdometer_v1();
     void updateLocalMap();
     void publishResult();
 
@@ -82,7 +83,8 @@ private:
     Eigen::Quaterniond q_main;
 
     // --- Odometry and Mapping ---
-    Eigen::Matrix4f current_pose = Eigen::Matrix4f::Identity();
+    Eigen::Affine3f current_pose = Eigen::Affine3f::Identity();
+    Eigen::Affine3f last_key_pose = Eigen::Affine3f::Identity();
     pcl::PointCloud<PointType>::Ptr local_map;
     pcl::PointCloud<PointType>::Ptr last_laser_cloud_in;
     bool is_first_frame = true;

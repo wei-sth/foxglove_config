@@ -74,7 +74,10 @@ void LivoNode::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) 
     data.cloud.reset(new pcl::PointCloud<PointType>());
     data.cloud->reserve(tmp_hesai_cloud.size());
     
+    // remove ego cloud and outlier (noisy points extremely far, 100m)
     for (const auto& p : tmp_hesai_cloud.points) {
+        if (p.x*p.x + p.y*p.y + p.z*p.z > 10000) continue;
+
         PointType dst;
         dst.x = p.x;
         dst.y = p.y;
@@ -116,10 +119,13 @@ void LivoNode::slamProcessLoop() {
 
         laser_cloud_in = current_lidar_data.cloud;
 
-        processIMU(current_imus);       // IMU 预积分
-        pointCloudPreprocessing();      // 点云处理
-        performOdometer();              // 配准（前端里程计）
-        updateLocalMap();               // 更新局部图
+        processIMU(current_imus);
+        pointCloudPreprocessing();
+        // v0: current scan align to pre scan, use pre pose as initial guess, not good for long duration
+        // performOdometer();
+        // updateLocalMap();
+        // v1: current scan align to local map, only key frame is added to local map
+        performOdometer_v1();
       
         // 3. 发布结果 (也可以异步发布)
         publishResult();
@@ -268,7 +274,7 @@ void LivoNode::performOdometer() {
     
     try {
         // 使用当前位姿作为初始猜测进行配准
-        vgicp.align(*aligned_cloud, current_pose);
+        vgicp.align(*aligned_cloud, current_pose.matrix());
 
         if (vgicp.hasConverged()) {
             // 更新当前位姿 (直接获得在世界坐标系下的位姿)
@@ -286,6 +292,66 @@ void LivoNode::performOdometer() {
     // 将当前帧配准后的点云存入 last_laser_cloud_in，作为下一帧的 target
     last_laser_cloud_in->clear();
     pcl::transformPointCloud(*laser_cloud_in, *last_laser_cloud_in, current_pose);
+}
+
+void LivoNode::performOdometer_v1() {
+    if (is_first_frame) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
+        *local_map += *cloud_world;
+        last_key_pose = current_pose;
+        is_first_frame = false;
+        return;
+    }
+
+    if (laser_cloud_in->empty() || local_map->empty()) return;
+
+    small_gicp::RegistrationPCL<PointType, PointType> vgicp;
+    vgicp.setRegistrationType("VGICP");
+    vgicp.setVoxelResolution(1.0);
+    vgicp.setNumThreads(4);
+    vgicp.setMaxCorrespondenceDistance(1.0);
+    vgicp.setNumNeighborsForCovariance(40);
+    vgicp.setMaximumIterations(100);
+
+    vgicp.setInputSource(laser_cloud_in);
+    vgicp.setInputTarget(local_map);
+
+    pcl::PointCloud<PointType>::Ptr aligned_cloud(new pcl::PointCloud<PointType>());
+    
+    try {
+        // 使用当前位姿作为初始猜测进行配准
+        vgicp.align(*aligned_cloud, current_pose.matrix());
+
+        if (vgicp.hasConverged()) {
+            current_pose = vgicp.getFinalTransformation();
+        } else {
+            RCLCPP_WARN(get_logger(), "VGICP did not converge!");
+        }
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_logger(), "VGICP align caught exception: %s", e.what());
+    }
+
+    // 关键帧判断：位移超过0.3m或者旋转超过10度
+    float delta_dist = (current_pose.translation() - last_key_pose.translation()).norm();
+    Eigen::Quaternionf q_curr(current_pose.linear());
+    Eigen::Quaternionf q_last(last_key_pose.linear());
+    float delta_angle = q_last.angularDistance(q_curr) * 180.0 / M_PI;
+
+    if (delta_dist > 0.3 || delta_angle > 10.0) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
+        *local_map += *cloud_world;
+
+        pcl::VoxelGrid<PointType> dsFilter;
+        dsFilter.setInputCloud(local_map);
+        dsFilter.setLeafSize(0.1, 0.1, 0.1);
+        pcl::PointCloud<PointType>::Ptr filtered_map(new pcl::PointCloud<PointType>());
+        dsFilter.filter(*filtered_map);
+        local_map = filtered_map;
+
+        last_key_pose = current_pose;
+    }
 }
 
 void LivoNode::updateLocalMap() {
@@ -310,29 +376,26 @@ void LivoNode::updateLocalMap() {
 }
 
 void LivoNode::publishResult() {
-    // 1. 发布里程计
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = rclcpp::Time(static_cast<uint64_t>(scan_end_time * 1e9));
     odom.header.frame_id = odometryFrame;
     odom.child_frame_id = bodyFrame;
 
-    Eigen::Matrix3f rot = current_pose.block<3, 3>(0, 0);
+    Eigen::Matrix3f rot = current_pose.linear();
     Eigen::Quaternionf q(rot);
     odom.pose.pose.orientation.x = q.x();
     odom.pose.pose.orientation.y = q.y();
     odom.pose.pose.orientation.z = q.z();
     odom.pose.pose.orientation.w = q.w();
-    odom.pose.pose.position.x = current_pose(0, 3);
-    odom.pose.pose.position.y = current_pose(1, 3);
-    odom.pose.pose.position.z = current_pose(2, 3);
+    odom.pose.pose.position.x = current_pose.translation().x();
+    odom.pose.pose.position.y = current_pose.translation().y();
+    odom.pose.pose.position.z = current_pose.translation().z();
     pub_odom->publish(odom);
 
-    // 2. 发布当前帧点云 (已转换到世界坐标系)
     pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
     pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
     publishCloud(pub_cloud_registered, cloud_world, odom.header.stamp, odometryFrame);
 
-    // 3. 发布局部地图
     if (pub_local_map->get_subscription_count() != 0) {
         publishCloud(pub_local_map, local_map, odom.header.stamp, odometryFrame);
     }
