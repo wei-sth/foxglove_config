@@ -13,6 +13,7 @@
 #include <Eigen/Geometry> // For Eigen::AngleAxisf
 #include <queue> // Required for std::queue
 #include <cmath> // For std::abs
+#include <chrono>
 
 // Implementation of WildTerrainSegmenter methods
 WildTerrainSegmenter::WildTerrainSegmenter(float max_range) : max_range(max_range) {
@@ -205,16 +206,27 @@ RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_se
 
 std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::detectObstacles(
     pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw) {
-    
-    // Step 1: Filter by distance and convert to PointXYZINormal
+    // auto t1 = std::chrono::steady_clock::now();
     auto cloud_filtered_normal = filterByRangeEgo(cloud_raw);
     
-    // Step 2: Build Range Image using PointXYZINormal
+    // auto t2 = std::chrono::steady_clock::now();
     buildRangeImage(cloud_filtered_normal);
-    
+
+    // auto t3 = std::chrono::steady_clock::now();
     // auto obstacles_with_normal_info = segmentGroundByNormal(); // Original function, commented out
     auto obstacles_with_normal_info = segmentGroundByPatchwork();
-    
+
+    // auto t4 = std::chrono::steady_clock::now();
+
+    // double d1 = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    // double d2 = std::chrono::duration<double, std::milli>(t3 - t2).count();
+    // double d3 = std::chrono::duration<double, std::milli>(t4 - t3).count();
+    // double total = d1 + d2 + d3;
+    // if (total > 0) {
+    //     std::cout << std::fixed << std::setprecision(2);
+    //     std::cout << "total:" << total << "ms,filterByRangeEgo:" << d1 << "ms,buildRangeImage:" << d2 << "ms,segmentGroundByPatchwork:" << d3 << std::endl;
+    // }
+
     // debug
     pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_with_normal_info);
 
@@ -384,6 +396,7 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::cl
 }
 
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByRangeEgo(pcl::PointCloud<PointXYZIRT>::Ptr cloud) {
+    // Filter by distance and convert to PointXYZINormal
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr filtered_normal(
         new pcl::PointCloud<pcl::PointXYZINormal>);
     filtered_normal->points.reserve(cloud->points.size()); // Reserve space
