@@ -389,7 +389,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByR
     filtered_normal->points.reserve(cloud->points.size()); // Reserve space
     
     for (const auto& pt_irt : cloud->points) {
-        float distance = std::sqrt(pt_irt.x * pt_irt.x + pt_irt.y * pt_irt.y);
+        float distance = std::sqrt(pt_irt.x * pt_irt.x + pt_irt.y * pt_irt.y + pt_irt.z * pt_irt.z);
         
         if (distance <= max_range && distance > 0.5f) {  // Min distance 0.5m
             pcl::PointXYZINormal pt_normal;
