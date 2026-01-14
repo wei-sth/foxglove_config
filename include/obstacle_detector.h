@@ -68,6 +68,9 @@ public:
     int num_lpr = 10;         // Take the lowest 10 points as seed points each time
     int num_iter = 3;         // Number of fitting iterations
 
+    int debug_r;
+    int debug_s;
+
     void segment(const cv::Mat& range_image, const cv::Mat& x_image, const cv::Mat& y_image, const cv::Mat& z_image, const cv::Mat& valid_mask,
                  pcl::PointCloud<pcl::PointXYZINormal>::Ptr& ground_cloud,
                  pcl::PointCloud<pcl::PointXYZINormal>::Ptr& obstacle_cloud);
@@ -80,7 +83,7 @@ private:
 
     // Fit plane using PCA: ax + by + cz + d = 0
     void estimate_plane(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud, const std::vector<int>& indices, 
-                        Eigen::Vector3f& normal, float& d);
+                        Eigen::Vector3f& normal, float& d, float& linearity);
 };
 
 class RangeImageObstacleDetector {
@@ -91,6 +94,8 @@ public:
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> detectObstacles(pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw);
     
 private:
+    // these three params are not used, I provide transform matrix directly
+    // look from +y to origin, get the angle from ground plane to lidar xy plane, get sensor_pitch (ccw is positive)
     float sensor_roll = 0.0;   // Sensor installation roll angle relative to ground plane
     float sensor_pitch = 0.523599;  // Sensor installation pitch angle relative to ground plane, 30 degree
     float sensor_yaw = 0.0;    // Sensor installation yaw angle relative to ground plane

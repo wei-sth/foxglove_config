@@ -1,4 +1,8 @@
 #include <pcl/io/pcd_io.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <Eigen/Geometry>
 #include "/home/weizh/foxglove_ws/src/foxglove_config/include/obstacle_detector.h"
 #include <cmath>
 
@@ -53,6 +57,104 @@ pcl::PointCloud<PointXYZIRT>::Ptr loadPCDAsIRT(const std::string& pcd_file_path)
         pt_irt.time = (h_angle + M_PI) / (2.0 * M_PI);
     }
     return cloud_irt;
+}
+
+/**
+ * @brief Get Lidar extrinsic parameters by fitting a plane to ground points.
+ *        The input PCD should contain only ground points for better results.
+ * 
+ * @param pcd_file_path Path to the input PCD file (PointXYZI).
+ */
+void getLidarExtrinsic(const std::string& pcd_file_path) {
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>);
+    if (pcl::io::loadPCDFile<pcl::PointXYZI>(pcd_file_path, *cloud) == -1) {
+        PCL_ERROR("Couldn't read file %s \n", pcd_file_path.c_str());
+        return;
+    }
+
+    pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+    pcl::SACSegmentation<pcl::PointXYZI> seg;
+    // Optional
+    seg.setOptimizeCoefficients(true);
+    // Mandatory
+    seg.setModelType(pcl::SACMODEL_PLANE);
+    seg.setMethodType(pcl::SAC_RANSAC);
+    seg.setDistanceThreshold(0.05);
+
+    seg.setInputCloud(cloud);
+    seg.segment(*inliers, *coefficients);
+
+    if (inliers->indices.size() == 0) {
+        PCL_ERROR("Could not estimate a planar model for the given dataset.");
+        return;
+    }
+
+    // visualization, extract inliers and save to a new PCD file
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_inliers(new pcl::PointCloud<pcl::PointXYZI>);
+    cloud_inliers->width = inliers->indices.size();
+    cloud_inliers->height = 1;
+    cloud_inliers->is_dense = true;
+    cloud_inliers->points.resize(inliers->indices.size());
+    for (size_t i = 0; i < inliers->indices.size(); ++i) {
+        cloud_inliers->points[i] = cloud->points[inliers->indices[i]];
+    }
+
+    std::string inlier_pcd_path = pcd_file_path;
+    size_t last_dot = inlier_pcd_path.find_last_of(".");
+    if (last_dot != std::string::npos) {
+        inlier_pcd_path.insert(last_dot, "_inlier");
+    } else {
+        inlier_pcd_path += "_inlier.pcd";
+    }
+    pcl::io::savePCDFileBinary(inlier_pcd_path, *cloud_inliers);
+    std::cout << "Inlier points saved to " << inlier_pcd_path << std::endl;
+
+    float a = coefficients->values[0];
+    float b = coefficients->values[1];
+    float c = coefficients->values[2];
+    float d = coefficients->values[3];
+
+    // Normalize the plane equation ax + by + cz + d = 0
+    float norm = std::sqrt(a*a + b*b + c*c);
+    a /= norm;
+    b /= norm;
+    c /= norm;
+    d /= norm;
+
+    // Ensure the normal points upwards (positive z)
+    if (c < 0) {
+        a = -a;
+        b = -b;
+        c = -c;
+        d = -d;
+    }
+
+    std::cout << "--- Lidar Extrinsic Calibration ---" << std::endl;
+    std::cout << "Plane equation: " << a << "x + " << b << "y + " << c << "z + " << d << " = 0" << std::endl;
+    std::cout << "Distance from (0,0,0) to ground plane: " << std::abs(d) << " meters" << std::endl;
+
+    // Construct the transformation matrix from Lidar to Ground
+    // The ground plane in the new coordinate system will be z = 0
+    Eigen::Vector3f z_new(a, b, c);
+    Eigen::Vector3f x_temp(1, 0, 0);
+    if (std::abs(z_new.dot(x_temp)) > 0.9) {
+        x_temp = Eigen::Vector3f(0, 1, 0);
+    }
+    Eigen::Vector3f y_new = z_new.cross(x_temp).normalized();
+    Eigen::Vector3f x_new = y_new.cross(z_new).normalized();
+
+    Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
+    // Rotation part: rows are the new basis vectors
+    transform.block<1, 3>(0, 0) = x_new.transpose();
+    transform.block<1, 3>(1, 0) = y_new.transpose();
+    transform.block<1, 3>(2, 0) = z_new.transpose();
+    // Translation part: moves the plane to z = 0
+    transform(2, 3) = d;
+
+    std::cout << "Transformation Matrix (Lidar -> Ground):" << std::endl;
+    std::cout << transform << std::endl;
+    std::cout << "-----------------------------------" << std::endl;
 }
 
 int main(int argc, char * argv[]) {
@@ -130,6 +232,10 @@ int main(int argc, char * argv[]) {
         pcl::io::savePCDFileBinary(output_pcd_path, *all_obstacles);
         std::cout << "Detected obstacles saved to " << output_pcd_path << std::endl;
     }
+
+
+    // calibration
+    getLidarExtrinsic("/home/weizh/data/755_903184160_ground.pcd");
 
     return 0;
 }

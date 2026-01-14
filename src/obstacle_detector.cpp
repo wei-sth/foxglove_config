@@ -68,7 +68,18 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
     temp_cloud->height = 1;
     temp_cloud->is_dense = true;
 
-    debugSavePolarGrid(polar_grid, temp_cloud, "/home/weizh/data/polar_grid.pcd"); // Debug function expects PointXYZ
+    // debug
+    float target_x = 7.693483;
+    float target_y = -0.854771;
+    float target_z = -0.574363;
+    float target_range = std::sqrt(target_x * target_x + target_y * target_y + target_z * target_z);
+    float target_angle = atan2(target_y, target_x) * 180.0 / M_PI;
+    if (target_angle < 0) target_angle += 360.0;
+    debug_r = std::min(num_rings - 1, (int)(target_range / (max_range / num_rings)));
+    debug_s = std::min(num_sectors - 1, (int)(target_angle / (360.0 / num_sectors)));
+    std::cout << "debug point (" << target_x << ", " << target_y << ", " << target_z << ") belongs to Cell [" << debug_r << ", " << debug_s << "]" << std::endl;
+
+    debugSavePolarGrid(polar_grid, temp_cloud, "/home/weizh/data/polar_grid.pcd");
 
     // 2. 逐个 Cell 处理
     for (int r = 0; r < num_rings; ++r) {
@@ -82,7 +93,22 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
             // 迭代拟合平面
             Eigen::Vector3f normal;
             float d;
-            estimate_plane(temp_cloud, seed_indices, normal, d);
+            float linearity;
+            estimate_plane(temp_cloud, seed_indices, normal, d, linearity);
+
+            if (r == debug_r && s == debug_s) {
+                std::cout << "Cell [" << r << ", " << s << "] Initial Plane: normal=" << normal.transpose() << ", d=" << d << ", seeds=" << seed_indices.size() << std::endl;
+                
+                // Save cell cloud
+                pcl::PointCloud<pcl::PointXYZINormal>::Ptr cell_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
+                for (int idx : indices) cell_cloud->push_back(temp_cloud->points[idx]);
+                pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell.pcd", *cell_cloud);
+
+                // Save seeds
+                pcl::PointCloud<pcl::PointXYZINormal>::Ptr seed_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
+                for (int idx : seed_indices) seed_cloud->push_back(temp_cloud->points[idx]);
+                pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell_seed.pcd", *seed_cloud);
+            }
 
             for (int iter = 0; iter < num_iter; ++iter) {
                 seed_indices.clear();
@@ -96,10 +122,22 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
                     }
                 }
                 if (seed_indices.size() < 5) break;
-                estimate_plane(temp_cloud, seed_indices, normal, d);
+                estimate_plane(temp_cloud, seed_indices, normal, d, linearity);
+            }
+
+            // if (linearity < 0.01f) {
+            //     std::cout << "Cell [" << r << ", " << s << "] linearity=" << linearity << std::endl;
+            // }
+
+            if (r == debug_r && s == debug_s) {
+                // Save inliers (final seed_indices after iterations are the inliers)
+                pcl::PointCloud<pcl::PointXYZINormal>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
+                for (int idx : seed_indices) inlier_cloud->push_back(temp_cloud->points[idx]);
+                pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell_final_inlier.pcd", *inlier_cloud);
             }
 
             // 3. 最终分类
+            bool contain_obstacle = false;
             for (int idx : indices) {
                 const auto& pt = temp_cloud->points[idx].getVector3fMap();
                 float dist = normal.dot(pt) + d;
@@ -108,12 +146,18 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
                     // 重点：这里可以再加一个法向量判据
                     // 如果 normal.z() 太小，说明这个平面本身就是竖着的，肯定是障碍
                     obstacle_cloud->points.push_back(temp_cloud->points[idx]);
+                    contain_obstacle = true;
                 } else if (dist < -dist_threshold) {
                     // 负值代表“凹陷”，可能是坑，割草机也得避开
                     obstacle_cloud->points.push_back(temp_cloud->points[idx]);
+                    contain_obstacle = true;
                 } else {
                     ground_cloud->points.push_back(temp_cloud->points[idx]);
                 }
+            }
+
+            if (contain_obstacle && linearity < 0.01f) {
+                std::cout << "Cell [" << r << ", " << s << "] contains obstacle, linearity=" << linearity << std::endl;
             }
         }
     }
@@ -130,7 +174,7 @@ std::vector<int> WildTerrainSegmenter::extract_seeds(const pcl::PointCloud<pcl::
 }
 
 void WildTerrainSegmenter::estimate_plane(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud, const std::vector<int>& indices, 
-                                        Eigen::Vector3f& normal, float& d) {
+                                        Eigen::Vector3f& normal, float& d, float& linearity) {
     Eigen::Vector3f mean(0, 0, 0);
     for (int idx : indices) mean += cloud->points[idx].getVector3fMap();
     mean /= indices.size();
@@ -143,6 +187,9 @@ void WildTerrainSegmenter::estimate_plane(const pcl::PointCloud<pcl::PointXYZINo
 
     // 最小特征值对应的特征向量就是平面的法向量
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
+    Eigen::Vector3f eigenvalues = solver.eigenvalues(); // e0 <= e1 <= e2
+    // if e0 and e1 are very small compared with e2 -- line, if linearity too small, need double check
+    linearity = (eigenvalues(2) > 1e-4) ? (eigenvalues(1) / eigenvalues(2)) : 0.0f;
     normal = solver.eigenvectors().col(0);
     
     // 确保法向量朝上 (针对机器人坐标系)
@@ -205,19 +252,29 @@ RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_se
 }
 
 void RangeImageObstacleDetector::updateSensorTransform() {
-    if (std::abs(sensor_roll) < 1e-6 && std::abs(sensor_pitch) < 1e-6 && std::abs(sensor_yaw) < 1e-6) {
-        apply_sensor_transform_ = false;
-        sensor_transform_ = Eigen::Affine3f::Identity();
-        sensor_inv_transform_ = Eigen::Affine3f::Identity();
-    } else {
-        apply_sensor_transform_ = true;
-        // ROS standard: Extrinsic XYZ (Roll-Pitch-Yaw)
-        // R = Rz(yaw) * Ry(pitch) * Rx(roll)
-        sensor_transform_ = Eigen::AngleAxisf(sensor_yaw, Eigen::Vector3f::UnitZ()) *
-                           Eigen::AngleAxisf(sensor_pitch, Eigen::Vector3f::UnitY()) *
-                           Eigen::AngleAxisf(sensor_roll, Eigen::Vector3f::UnitX());
-        sensor_inv_transform_ = sensor_transform_.inverse();
-    }
+    apply_sensor_transform_ = true;
+    // only keep rotation, the last row and col must be 0,0,0,1, since filter by distance is distance from liar origin (0,0,0), and range image is built on lidar origin, so the lidar origin should not change
+    sensor_transform_.matrix() << 0.882501, -0.0144251, 0.470089, 0,
+                                 -0, 0.99953, 0.0306714, 0,
+                                 -0.470311, -0.0270675, 0.882086, 0,
+                                 0, 0, 0, 1;
+    sensor_inv_transform_ = sensor_transform_.inverse();
+
+    // if (std::abs(sensor_roll) < 1e-6 && std::abs(sensor_pitch) < 1e-6 && std::abs(sensor_yaw) < 1e-6) {
+    //     apply_sensor_transform_ = false;
+    //     sensor_transform_ = Eigen::Affine3f::Identity();
+    //     sensor_inv_transform_ = Eigen::Affine3f::Identity();
+    // } else {
+    //     apply_sensor_transform_ = true;
+    //     // ROS standard: Extrinsic XYZ (Roll-Pitch-Yaw)
+    //     // R = Rz(yaw) * Ry(pitch) * Rx(roll)
+    //     sensor_transform_ = Eigen::AngleAxisf(sensor_yaw, Eigen::Vector3f::UnitZ()) *
+    //                        Eigen::AngleAxisf(sensor_pitch, Eigen::Vector3f::UnitY()) *
+    //                        Eigen::AngleAxisf(sensor_roll, Eigen::Vector3f::UnitX());
+    //     sensor_inv_transform_ = sensor_transform_.inverse();
+    // }
+    // std::cout << "--- Sensor Transform Matrix ---" << std::endl;
+    // std::cout << sensor_transform_.matrix() << std::endl;
 }
 
 std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::detectObstacles(
@@ -250,6 +307,7 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
         pcl::transformPointCloud(*obstacles_lidar, *obstacles_lidar, sensor_inv_transform_);
     }
     pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_lidar);
+    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster_transformed.pcd", *obstacles_with_normal_info);
 
     // Step 4: Perform clustering using Euclidean method
     // return clusterEuclidean(obstacles_with_normal_info);
