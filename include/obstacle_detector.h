@@ -59,14 +59,14 @@ class WildTerrainSegmenter {
 public:
     WildTerrainSegmenter(float max_range);
 
-    // 参数设置
-    int num_rings = 20;       // 距离划分
-    int num_sectors = 36;     // 角度划分 (每10度一格)
+    // Parameter settings
+    int num_rings = 20;       // Distance division
+    int num_sectors = 36;     // Angle division (10 degrees per bin)
     float max_range;
-    float sensor_height = 0.5; // 传感器安装高度
-    float dist_threshold = 0.12; // 超过12cm视为障碍
-    int num_lpr = 10;         // 每次取最低的10个点作为种子点
-    int num_iter = 3;         // 迭代拟合次数
+    float sensor_height = 0.5; // Sensor installation height relative to ground plane
+    float dist_threshold = 0.12; // if distance exceeds dist_threshold: obstacle, if within dist_threshold: ground
+    int num_lpr = 10;         // Take the lowest 10 points as seed points each time
+    int num_iter = 3;         // Number of fitting iterations
 
     void segment(const cv::Mat& range_image, const cv::Mat& x_image, const cv::Mat& y_image, const cv::Mat& z_image, const cv::Mat& valid_mask,
                  pcl::PointCloud<pcl::PointXYZINormal>::Ptr& ground_cloud,
@@ -75,10 +75,10 @@ public:
     void debugSavePolarGrid(const std::vector<std::vector<Cell>>& polar_grid, const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud_in, const std::string& path);
 
 private:
-    // 寻找最低的一组点
+    // Find the lowest set of points
     std::vector<int> extract_seeds(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud, const std::vector<int>& indices);
 
-    // 使用 PCA 拟合平面: ax + by + cz + d = 0
+    // Fit plane using PCA: ax + by + cz + d = 0
     void estimate_plane(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud, const std::vector<int>& indices, 
                         Eigen::Vector3f& normal, float& d);
 };
@@ -91,6 +91,16 @@ public:
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> detectObstacles(pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw);
     
 private:
+    float sensor_roll = 0.0;   // Sensor installation roll angle relative to ground plane
+    float sensor_pitch = 0.523599;  // Sensor installation pitch angle relative to ground plane, 30 degree
+    float sensor_yaw = 0.0;    // Sensor installation yaw angle relative to ground plane
+    
+    Eigen::Affine3f sensor_transform_ = Eigen::Affine3f::Identity();
+    Eigen::Affine3f sensor_inv_transform_ = Eigen::Affine3f::Identity();
+    bool apply_sensor_transform_ = false;
+
+    void updateSensorTransform();
+
     int num_rings;
     int num_sectors;
     float max_range;

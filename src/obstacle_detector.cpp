@@ -194,14 +194,30 @@ RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_se
       visited_mask_(num_rings, num_sectors, CV_8UC1, cv::Scalar(0)), // Initialize visited mask
       wild_terrain_segmenter_(max_range)
 {
-    
     range_image_ = cv::Mat(num_rings, num_sectors, CV_32FC1, 
                            cv::Scalar(std::numeric_limits<float>::max()));
     x_image_ = cv::Mat(num_rings, num_sectors, CV_32FC1, cv::Scalar(0));
     y_image_ = cv::Mat(num_rings, num_sectors, CV_32FC1, cv::Scalar(0));
     z_image_ = cv::Mat(num_rings, num_sectors, CV_32FC1, cv::Scalar(0));
-    
     valid_mask_ = cv::Mat(num_rings, num_sectors, CV_8UC1, cv::Scalar(0));
+
+    updateSensorTransform();
+}
+
+void RangeImageObstacleDetector::updateSensorTransform() {
+    if (std::abs(sensor_roll) < 1e-6 && std::abs(sensor_pitch) < 1e-6 && std::abs(sensor_yaw) < 1e-6) {
+        apply_sensor_transform_ = false;
+        sensor_transform_ = Eigen::Affine3f::Identity();
+        sensor_inv_transform_ = Eigen::Affine3f::Identity();
+    } else {
+        apply_sensor_transform_ = true;
+        // ROS standard: Extrinsic XYZ (Roll-Pitch-Yaw)
+        // R = Rz(yaw) * Ry(pitch) * Rx(roll)
+        sensor_transform_ = Eigen::AngleAxisf(sensor_yaw, Eigen::Vector3f::UnitZ()) *
+                           Eigen::AngleAxisf(sensor_pitch, Eigen::Vector3f::UnitY()) *
+                           Eigen::AngleAxisf(sensor_roll, Eigen::Vector3f::UnitX());
+        sensor_inv_transform_ = sensor_transform_.inverse();
+    }
 }
 
 std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::detectObstacles(
@@ -228,11 +244,25 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
     // }
 
     // debug
-    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_with_normal_info);
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_lidar(new pcl::PointCloud<pcl::PointXYZINormal>);  // in lidar frame
+    pcl::copyPointCloud(*obstacles_with_normal_info, *obstacles_lidar);
+    if (apply_sensor_transform_) {
+        pcl::transformPointCloud(*obstacles_lidar, *obstacles_lidar, sensor_inv_transform_);
+    }
+    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_lidar);
 
     // Step 4: Perform clustering using Euclidean method
     // return clusterEuclidean(obstacles_with_normal_info);
-    return clusterConnectivity(obstacles_with_normal_info);
+    auto clusters = clusterConnectivity(obstacles_with_normal_info);
+
+    // Step 5: Transform clusters back to original sensor frame
+    if (apply_sensor_transform_) {
+        for (auto& cluster : clusters) {
+            pcl::transformPointCloud(*cluster, *cluster, sensor_inv_transform_);
+        }
+    }
+
+    return clusters;
 }
 
 std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::clusterEuclidean(
@@ -396,19 +426,23 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::cl
 }
 
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByRangeEgo(pcl::PointCloud<PointXYZIRT>::Ptr cloud) {
-    // Filter by distance and convert to PointXYZINormal
+    // Filter by distance, convert to PointXYZINormal, transform xy plane to ground
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr filtered_normal(
         new pcl::PointCloud<pcl::PointXYZINormal>);
     filtered_normal->points.reserve(cloud->points.size()); // Reserve space
     
     for (const auto& pt_irt : cloud->points) {
-        float distance = std::sqrt(pt_irt.x * pt_irt.x + pt_irt.y * pt_irt.y + pt_irt.z * pt_irt.z);
+        Eigen::Vector3f p(pt_irt.x, pt_irt.y, pt_irt.z);
+        if (apply_sensor_transform_) {
+            p = sensor_transform_ * p;
+        }
+        float distance = p.norm();
         
         if (distance <= max_range && distance > 0.5f) {  // Min distance 0.5m
             pcl::PointXYZINormal pt_normal;
-            pt_normal.x = pt_irt.x;
-            pt_normal.y = pt_irt.y;
-            pt_normal.z = pt_irt.z;
+            pt_normal.x = p.x();
+            pt_normal.y = p.y();
+            pt_normal.z = p.z();
             pt_normal.intensity = pt_irt.intensity;
             pt_normal.normal_x = static_cast<float>(pt_irt.ring); // Store ring in normal_x
             pt_normal.normal_y = pt_irt.time; // Store time in normal_y
