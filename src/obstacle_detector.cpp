@@ -254,10 +254,16 @@ RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_se
 void RangeImageObstacleDetector::updateSensorTransform() {
     apply_sensor_transform_ = true;
     // only keep rotation, the last row and col must be 0,0,0,1, since filter by distance is distance from liar origin (0,0,0), and range image is built on lidar origin, so the lidar origin should not change
-    sensor_transform_.matrix() << 0.882501, -0.0144251, 0.470089, 0,
-                                 -0, 0.99953, 0.0306714, 0,
-                                 -0.470311, -0.0270675, 0.882086, 0,
-                                 0, 0, 0, 1;
+    // mower
+    // sensor_transform_.matrix() << 0.882501, -0.0144251, 0.470089, 0,
+    //                              -0, 0.99953, 0.0306714, 0,
+    //                              -0.470311, -0.0270675, 0.882086, 0,
+    //                              0, 0, 0, 1;
+    // chair, indoor
+    sensor_transform_.matrix() << 0.859627, 0.0152364, 0.510695, 0,
+                                  0, 0.999555, -0.0298213, 0,
+                                  -0.510922, 0.0256352, 0.859245, 0,
+                                  0, 0, 0, 1;
     sensor_inv_transform_ = sensor_transform_.inverse();
 
     // if (std::abs(sensor_roll) < 1e-6 && std::abs(sensor_pitch) < 1e-6 && std::abs(sensor_yaw) < 1e-6) {
@@ -279,6 +285,52 @@ void RangeImageObstacleDetector::updateSensorTransform() {
 
 std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::detectObstacles(
     pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw) {
+    // auto t1 = std::chrono::steady_clock::now();
+    auto cloud_filtered_normal = filterByRangeEgo(cloud_raw);
+    
+    // auto t2 = std::chrono::steady_clock::now();
+    buildRangeImage(cloud_filtered_normal);
+
+    // auto t3 = std::chrono::steady_clock::now();
+    // auto obstacles_with_normal_info = segmentGroundByNormal(); // Original function, commented out
+    auto obstacles_with_normal_info = segmentGroundByPatchwork();
+
+    // auto t4 = std::chrono::steady_clock::now();
+
+    // double d1 = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    // double d2 = std::chrono::duration<double, std::milli>(t3 - t2).count();
+    // double d3 = std::chrono::duration<double, std::milli>(t4 - t3).count();
+    // double total = d1 + d2 + d3;
+    // if (total > 0) {
+    //     std::cout << std::fixed << std::setprecision(2);
+    //     std::cout << "total:" << total << "ms,filterByRangeEgo:" << d1 << "ms,buildRangeImage:" << d2 << "ms,segmentGroundByPatchwork:" << d3 << std::endl;
+    // }
+
+    // debug
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_lidar(new pcl::PointCloud<pcl::PointXYZINormal>);  // in lidar frame
+    pcl::copyPointCloud(*obstacles_with_normal_info, *obstacles_lidar);
+    if (apply_sensor_transform_) {
+        pcl::transformPointCloud(*obstacles_lidar, *obstacles_lidar, sensor_inv_transform_);
+    }
+    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_lidar);
+    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster_transformed.pcd", *obstacles_with_normal_info);
+
+    // Step 4: Perform clustering using Euclidean method
+    // return clusterEuclidean(obstacles_with_normal_info);
+    auto clusters = clusterConnectivity(obstacles_with_normal_info);
+
+    // Step 5: Transform clusters back to original sensor frame
+    if (apply_sensor_transform_) {
+        for (auto& cluster : clusters) {
+            pcl::transformPointCloud(*cluster, *cluster, sensor_inv_transform_);
+        }
+    }
+
+    return clusters;
+}
+
+std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::detectObstacles(
+    pcl::PointCloud<RSPointDefault>::Ptr cloud_raw) {
     // auto t1 = std::chrono::steady_clock::now();
     auto cloud_filtered_normal = filterByRangeEgo(cloud_raw);
     
@@ -504,6 +556,36 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByR
             pt_normal.intensity = pt_irt.intensity;
             pt_normal.normal_x = static_cast<float>(pt_irt.ring); // Store ring in normal_x
             pt_normal.normal_y = pt_irt.time; // Store time in normal_y
+            // normal_z, curvature can be left as default or set to 0
+            
+            filtered_normal->points.push_back(pt_normal);
+        }
+    }
+    
+    return filtered_normal;
+}
+
+pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByRangeEgo(pcl::PointCloud<RSPointDefault>::Ptr cloud) {
+    // Filter by distance, convert to PointXYZINormal, transform xy plane to ground
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr filtered_normal(
+        new pcl::PointCloud<pcl::PointXYZINormal>);
+    filtered_normal->points.reserve(cloud->points.size()); // Reserve space
+    
+    for (const auto& pt : cloud->points) {
+        Eigen::Vector3f p(pt.x, pt.y, pt.z);
+        if (apply_sensor_transform_) {
+            p = sensor_transform_ * p;
+        }
+        float distance = p.norm();
+        
+        if (distance <= max_range && distance > 0.5f) {  // Min distance 0.5m
+            pcl::PointXYZINormal pt_normal;
+            pt_normal.x = p.x();
+            pt_normal.y = p.y();
+            pt_normal.z = p.z();
+            pt_normal.intensity = pt.intensity;
+            pt_normal.normal_x = static_cast<float>(pt.ring); // Store ring in normal_x
+            pt_normal.normal_y = pt.timestamp; // Store time in normal_y
             // normal_z, curvature can be left as default or set to 0
             
             filtered_normal->points.push_back(pt_normal);

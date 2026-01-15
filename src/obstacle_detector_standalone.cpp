@@ -59,22 +59,18 @@ pcl::PointCloud<PointXYZIRT>::Ptr loadPCDAsIRT(const std::string& pcd_file_path)
     return cloud_irt;
 }
 
-/**
- * @brief Get Lidar extrinsic parameters by fitting a plane to ground points.
- *        The input PCD should contain only ground points for better results.
- * 
- * @param pcd_file_path Path to the input PCD file (PointXYZI).
- */
+// Get Lidar extrinsic parameters by fitting a plane to ground points.
+// Input PCD file should only contain xyz since cloudcompare changes scalar field type. In cloudcompare, use Edit -> Scalar fields -> Delete all.
 void getLidarExtrinsic(const std::string& pcd_file_path) {
-    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    if (pcl::io::loadPCDFile<pcl::PointXYZI>(pcd_file_path, *cloud) == -1) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    if (pcl::io::loadPCDFile<pcl::PointXYZ>(pcd_file_path, *cloud) == -1) {
         PCL_ERROR("Couldn't read file %s \n", pcd_file_path.c_str());
         return;
     }
 
     pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
     pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
-    pcl::SACSegmentation<pcl::PointXYZI> seg;
+    pcl::SACSegmentation<pcl::PointXYZ> seg;
     // Optional
     seg.setOptimizeCoefficients(true);
     // Mandatory
@@ -91,7 +87,7 @@ void getLidarExtrinsic(const std::string& pcd_file_path) {
     }
 
     // visualization, extract inliers and save to a new PCD file
-    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_inliers(new pcl::PointCloud<pcl::PointXYZI>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_inliers(new pcl::PointCloud<pcl::PointXYZ>);
     cloud_inliers->width = inliers->indices.size();
     cloud_inliers->height = 1;
     cloud_inliers->is_dense = true;
@@ -158,9 +154,13 @@ void getLidarExtrinsic(const std::string& pcd_file_path) {
 }
 
 int main(int argc, char * argv[]) {
-    // PCD file processing mode
+    // xt16
+    // int num_rings = 16;
+    // int num_sectors = 2000;
+
+    // robosense airy 96
     int num_rings = 96;
-    int num_sectors = 2000;
+    int num_sectors = 900;
     float max_distance = 55.0f; // Aligned with obstacle_detector_node.cpp
     float min_cluster_z_difference = 0.2f; // Aligned with obstacle_detector_node.cpp
 
@@ -181,19 +181,25 @@ int main(int argc, char * argv[]) {
     std::cout << "Loaded " << cloud_raw->width * cloud_raw->height
                 << " data points from " << pcd_file_path << std::endl;
 
-    // Test the new function: load PointXYZI and convert to PointXYZIRT
-    std::string pcd_file_path_rs = "/home/weizh/data/bag_2026_0109/rosbag2_2026_01_08-18_38_26_0_logs/rslidar_points/755_603190160.pcd";
-    
-    pcl::PointCloud<PointXYZIRT>::Ptr cloud_converted = loadPCDAsIRT(pcd_file_path_rs);
-    if (cloud_converted) {
-        std::string converted_pcd_path = "/home/weizh/data/converted_irt_0113.pcd";
-        pcl::io::savePCDFileBinary(converted_pcd_path, *cloud_converted);
-        std::cout << "Converted PointXYZIRT saved to " << converted_pcd_path << std::endl;
-    }
+    // load PointXYZI and convert to PointXYZIRT
+    // std::string pcd_file_path_rs = "/home/weizh/data/bag_2026_0109/rosbag2_2026_01_08-18_38_26_0_logs/rslidar_points/755_603190160.pcd";
+    // pcl::PointCloud<PointXYZIRT>::Ptr cloud_converted = loadPCDAsIRT(pcd_file_path_rs);
+    // if (cloud_converted) {
+    //     std::string converted_pcd_path = "/home/weizh/data/converted_irt_0113.pcd";
+    //     pcl::io::savePCDFileBinary(converted_pcd_path, *cloud_converted);
+    //     std::cout << "Converted PointXYZIRT saved to " << converted_pcd_path << std::endl;
+    // }
 
-    // return 0;
+    // load RSPointDefault
+    pcl::PointCloud<RSPointDefault>::Ptr rs_cloud_raw(new pcl::PointCloud<RSPointDefault>);
+    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_01_14-17_06_23/rosbag2_2026_01_14-17_06_23_0_logs/rslidar_points/592_403189080.pcd";
+    if (pcl::io::loadPCDFile<RSPointDefault>(rs_pcd_file_path, *rs_cloud_raw) == -1) {
+        PCL_ERROR("Couldn't read file %s \n", rs_pcd_file_path.c_str());
+        return (-1);
+    }
+    std::cout << "Loaded " << rs_cloud_raw->width * rs_cloud_raw->height << " data points from " << rs_pcd_file_path << std::endl;
     
-    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters = detector.detectObstacles(cloud_converted);
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters = detector.detectObstacles(rs_cloud_raw);
 
     // Save all valid points with their computed normals to a PCD file for 3D visualization
     std::string normals_pcd_path = "/home/weizh/data/range_image_normals.pcd";
@@ -235,7 +241,7 @@ int main(int argc, char * argv[]) {
 
 
     // calibration
-    getLidarExtrinsic("/home/weizh/data/755_903184160_ground.pcd");
+    getLidarExtrinsic("/home/weizh/data/592_403189080_ground.pcd");
 
     return 0;
 }

@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <iostream>
 
-// Original PointXYZIRT definition for reading the PCD file and ROS message
+// for xt16, time is relative time, unit: ns 
 struct PointXYZIRT {
     PCL_ADD_POINT4D;
     float intensity;
@@ -28,6 +28,23 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIRT,
     (float, intensity, intensity)
     (uint16_t, ring, ring)
     (float, time, time))
+
+// robosense airy, time is absolute time
+struct RSPointDefault {
+    PCL_ADD_POINT4D;
+    float intensity;
+    uint16_t ring;
+    double timestamp;
+    uint8_t feature;
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+
+POINT_CLOUD_REGISTER_POINT_STRUCT(RSPointDefault,
+    (float, x, x)(float, y, y)(float, z, z)
+    (float, intensity, intensity)
+    (uint16_t, ring, ring)
+    (double, timestamp, timestamp)
+    (uint8_t, feature, feature))
 
 struct BoundingBox {
     pcl::PointXYZ min_point;
@@ -92,6 +109,7 @@ public:
                                float max_range = 10.0f, float min_cluster_z_difference = 0.1f);
     
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> detectObstacles(pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw);
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> detectObstacles(pcl::PointCloud<RSPointDefault>::Ptr cloud_raw);
     
 private:
     // these three params are not used, I provide transform matrix directly
@@ -121,6 +139,7 @@ private:
     cv::Mat visited_mask_;
     
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr filterByRangeEgo(pcl::PointCloud<PointXYZIRT>::Ptr cloud);
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr filterByRangeEgo(pcl::PointCloud<RSPointDefault>::Ptr cloud);
     void buildRangeImage(pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud);
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr segmentGroundByNormal();
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr segmentGroundByPatchwork();
