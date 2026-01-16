@@ -69,9 +69,16 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
     temp_cloud->is_dense = true;
 
     // debug
-    float target_x = 7.693483;
-    float target_y = -0.854771;
-    float target_z = -0.574363;
+    // float target_x = 7.693483;
+    // float target_y = -0.854771;
+    // float target_z = -0.574363;
+    // float target_x = 0.939290;
+    // float target_y = 0.925231;
+    // float target_z = 0.096044;
+    float target_x = -1.393945;
+    float target_y = 1.085931;
+    float target_z = 3.254558;
+    
     float target_range = std::sqrt(target_x * target_x + target_y * target_y + target_z * target_z);
     float target_angle = atan2(target_y, target_x) * 180.0 / M_PI;
     if (target_angle < 0) target_angle += 360.0;
@@ -82,6 +89,13 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
     debugSavePolarGrid(polar_grid, temp_cloud, "/home/weizh/data/polar_grid.pcd");
 
     // 2. 逐个 Cell 处理
+    struct PlaneParams {
+        Eigen::Vector3f normal;
+        float d;
+        bool valid = false;
+    };
+    std::vector<std::vector<PlaneParams>> cell_planes(num_rings, std::vector<PlaneParams>(num_sectors));
+
     for (int r = 0; r < num_rings; ++r) {
         for (int s = 0; s < num_sectors; ++s) {
             const auto& indices = polar_grid[r][s].point_indices;
@@ -125,11 +139,16 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
                 estimate_plane(temp_cloud, seed_indices, normal, d, linearity);
             }
 
+            cell_planes[r][s].normal = normal;
+            cell_planes[r][s].d = d;
+            cell_planes[r][s].valid = true;
+
             // if (linearity < 0.01f) {
             //     std::cout << "Cell [" << r << ", " << s << "] linearity=" << linearity << std::endl;
             // }
 
             if (r == debug_r && s == debug_s) {
+                std::cout << "Cell [" << r << ", " << s << "] Final Plane: normal=" << normal.transpose() << ", d=" << d << ", seeds=" << seed_indices.size() << std::endl;
                 // Save inliers (final seed_indices after iterations are the inliers)
                 pcl::PointCloud<pcl::PointXYZINormal>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
                 for (int idx : seed_indices) inlier_cloud->push_back(temp_cloud->points[idx]);
@@ -142,9 +161,8 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
                 const auto& pt = temp_cloud->points[idx].getVector3fMap();
                 float dist = normal.dot(pt) + d;
 
-                if (dist > dist_threshold) {
-                    // 重点：这里可以再加一个法向量判据
-                    // 如果 normal.z() 太小，说明这个平面本身就是竖着的，肯定是障碍
+                // use normal_z_threshold might also classify some ground points in this bin as obstacle, need to revise, see target_x = 0.939290
+                if (dist > dist_threshold || std::abs(normal.z()) < normal_z_threshold) {
                     obstacle_cloud->points.push_back(temp_cloud->points[idx]);
                     contain_obstacle = true;
                 } else if (dist < -dist_threshold) {
@@ -158,6 +176,55 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
 
             if (contain_obstacle && linearity < 0.01f) {
                 std::cout << "Cell [" << r << ", " << s << "] contains obstacle, linearity=" << linearity << std::endl;
+            }
+        }
+    }
+
+    // 4. Global Consistency Check (Reporting only)
+    for (int r = 1; r < num_rings; ++r) {
+        for (int s = 0; s < num_sectors; ++s) {
+            if (cell_planes[r][s].valid && cell_planes[r-1][s].valid) {
+                // Only check if both are ground-like (not walls)
+                if (std::abs(cell_planes[r][s].normal.z()) > normal_z_threshold &&
+                    std::abs(cell_planes[r-1][s].normal.z()) > normal_z_threshold) {
+                    
+                    float R = r * (max_range / num_rings);
+                    float angle_deg = (s + 0.5f) * (360.0f / num_sectors);
+                    float angle_rad = angle_deg * M_PI / 180.0f;
+                    float x = R * std::cos(angle_rad);
+                    float y = R * std::sin(angle_rad);
+                    
+                    float z_prev = -(cell_planes[r-1][s].normal.x() * x + cell_planes[r-1][s].normal.y() * y + cell_planes[r-1][s].d) / cell_planes[r-1][s].normal.z();
+                    float z_curr = -(cell_planes[r][s].normal.x() * x + cell_planes[r][s].normal.y() * y + cell_planes[r][s].d) / cell_planes[r][s].normal.z();
+                    
+                    if (std::abs(z_prev - z_curr) > 0.15f) {
+                        std::cout << "[Consistency Check] Radial discontinuity detected between Cell [" << r-1 << "," << s << "] and [" << r << "," << s << "]: delta_z=" << std::abs(z_prev - z_curr) << "m" << std::endl;
+                    }
+                }
+            }
+        }
+    }
+
+    // Angular check
+    for (int r = 0; r < num_rings; ++r) {
+        for (int s = 0; s < num_sectors; ++s) {
+            int s_next = (s + 1) % num_sectors;
+            if (cell_planes[r][s].valid && cell_planes[r][s_next].valid) {
+                if (std::abs(cell_planes[r][s].normal.z()) > normal_z_threshold &&
+                    std::abs(cell_planes[r][s_next].normal.z()) > normal_z_threshold) {
+                    
+                    float R = (r + 0.5f) * (max_range / num_rings);
+                    float angle_rad = (s + 1.0f) * (360.0f / num_sectors) * M_PI / 180.0f;
+                    float x = R * std::cos(angle_rad);
+                    float y = R * std::sin(angle_rad);
+                    
+                    float z_curr = -(cell_planes[r][s].normal.x() * x + cell_planes[r][s].normal.y() * y + cell_planes[r][s].d) / cell_planes[r][s].normal.z();
+                    float z_next = -(cell_planes[r][s_next].normal.x() * x + cell_planes[r][s_next].normal.y() * y + cell_planes[r][s_next].d) / cell_planes[r][s_next].normal.z();
+                    
+                    if (std::abs(z_curr - z_next) > 0.15f) {
+                        std::cout << "[Consistency Check] Angular discontinuity detected between Cell [" << r << "," << s << "] and [" << r << "," << s_next << "]: delta_z=" << std::abs(z_curr - z_next) << "m" << std::endl;
+                    }
+                }
             }
         }
     }
@@ -233,9 +300,9 @@ void WildTerrainSegmenter::debugSavePolarGrid(const std::vector<std::vector<Cell
 // 2. same row, col and col+1, distance is far, but they belong to different objects
 
 RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_sectors, 
-                               float max_range, float min_cluster_z_difference)
+                               float max_range, float min_cluster_z_difference, VisResultType vis_type)
     : num_rings(num_rings), num_sectors(num_sectors), max_range(max_range),
-      min_cluster_z_difference_(min_cluster_z_difference),
+      min_cluster_z_difference_(min_cluster_z_difference), vis_type_(vis_type),
       obstacle_grid_flat_(num_rings * num_sectors, nullptr), // Initialize flattened grid
       temp_valid_mask_(num_rings, num_sectors, CV_8UC1, cv::Scalar(0)), // Initialize temp valid mask
       visited_mask_(num_rings, num_sectors, CV_8UC1, cv::Scalar(0)), // Initialize visited mask
@@ -319,6 +386,8 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
     // return clusterEuclidean(obstacles_with_normal_info);
     auto clusters = clusterConnectivity(obstacles_with_normal_info);
 
+    bboxes_lidar_frame_ = getObstacleBBoxesFromGround(clusters);
+
     // Step 5: Transform clusters back to original sensor frame
     if (apply_sensor_transform_) {
         for (auto& cluster : clusters) {
@@ -365,11 +434,19 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
     // return clusterEuclidean(obstacles_with_normal_info);
     auto clusters = clusterConnectivity(obstacles_with_normal_info);
 
-    // Step 5: Transform clusters back to original sensor frame
+    if (vis_type_ == VisResultType::BBOX_GROUND) {
+        bboxes_lidar_frame_ = getObstacleBBoxesFromGround(clusters);
+    }
+
+    // transform clusters back to original sensor frame
     if (apply_sensor_transform_) {
         for (auto& cluster : clusters) {
             pcl::transformPointCloud(*cluster, *cluster, sensor_inv_transform_);
         }
+    }
+
+    if (vis_type_ == VisResultType::BBOX_LIDAR_XY) {
+        bboxes_lidar_frame_ = getObstacleBBoxes(clusters);
     }
 
     return clusters;
@@ -779,7 +856,7 @@ void RangeImageObstacleDetector::saveNormalsToPCD(const std::string& path) {
     pcl::io::savePCDFileBinary(path, *cloud_with_normals);
 }
 
-std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingBoxesNew(
+std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBBoxesPCA(
     const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
     
     std::vector<RotatedBoundingBox> rotated_bboxes;
@@ -846,16 +923,14 @@ std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingB
         // We pick the first identified horizontal PC to define the angle.
         Eigen::Vector3f primary_horizontal_pc = eigen_vectors.col(horizontal_pc_indices[0]);
         float angle = std::atan2(primary_horizontal_pc(1), primary_horizontal_pc(0)); // Angle of this PC's XY projection
-
+        // todo: note need to revise, about angle and orientation ... 
         RotatedBoundingBox rbbox;
         rbbox.center.x = centroid[0];
         rbbox.center.y = centroid[1];
         rbbox.center.z = (min_z_cluster + max_z_cluster) / 2.0f; // Corrected Z-center: midpoint of actual Z range
-        rbbox.width = final_width;
-        rbbox.height = final_height;
-        rbbox.angle = angle;
-        rbbox.min_z_point.z = min_z_cluster;
-        rbbox.max_z_point.z = max_z_cluster;
+        rbbox.size_x = final_width;
+        rbbox.size_y = final_height;
+        rbbox.size_z = max_z_cluster - min_z_cluster;
 
         // Filter by a minimum volume or size if needed
         // Use the actual 3D dimensions for filtering
@@ -867,60 +942,106 @@ std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingB
     return rotated_bboxes;
 }
 
-std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingBoxesNewV2(
-    const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
+bool RangeImageObstacleDetector::computeClusterGeom(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cluster, MinAreaRect& mar, float& min_z_cluster, float& max_z_cluster) {
+    // compute cluster geometry in ref frame
+    if (cluster->points.empty()) return false;
+
+    // 1. Extract 2D points (XY plane) and find Z-extents
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cluster_2d(new pcl::PointCloud<pcl::PointXYZI>);
+    min_z_cluster = std::numeric_limits<float>::max();
+    max_z_cluster = -std::numeric_limits<float>::max();
+
+    for (const auto& pt : cluster->points) {
+        pcl::PointXYZI pt_2d;
+        pt_2d.x = pt.x;
+        pt_2d.y = pt.y;
+        pt_2d.z = 0.0f; // Project to XY plane
+        cluster_2d->points.push_back(pt_2d);
+
+        min_z_cluster = std::min(min_z_cluster, pt.z);
+        max_z_cluster = std::max(max_z_cluster, pt.z);
+    }
+
+    if (cluster_2d->points.size() < 3) { // Need at least 3 points for a convex hull
+        return false;
+    }
+
+    // 2. Compute 2D Convex Hull
+    pcl::PointCloud<pcl::PointXYZI>::Ptr hull_points(new pcl::PointCloud<pcl::PointXYZI>);
+    pcl::ConvexHull<pcl::PointXYZI> ch;
+    ch.setInputCloud(cluster_2d);
+    ch.reconstruct(*hull_points);
+
+    if (hull_points->points.empty()) {
+        return false;
+    }
+
+    // 3. Apply Rotating Calipers to find Minimum Area Rectangle
+    mar = findMinAreaRect(hull_points);
+
+    return true;
+}
+
+std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBBoxesFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
+    // input clusters are in ground frame, output is in lidar frame
     
     std::vector<RotatedBoundingBox> rotated_bboxes;
     for (const auto& current_cluster : clusters) {
-        if (current_cluster->points.empty()) continue;
+        MinAreaRect mar;
+        float min_z_cluster;
+        float max_z_cluster;
 
-        // 1. Extract 2D points (XY plane) and find Z-extents
-        pcl::PointCloud<pcl::PointXYZI>::Ptr cluster_2d(new pcl::PointCloud<pcl::PointXYZI>);
-        float min_z_cluster = std::numeric_limits<float>::max();
-        float max_z_cluster = -std::numeric_limits<float>::max();
+        if(!computeClusterGeom(current_cluster, mar, min_z_cluster, max_z_cluster)) continue;
 
-        for (const auto& pt : current_cluster->points) {
-            pcl::PointXYZI pt_2d;
-            pt_2d.x = pt.x;
-            pt_2d.y = pt.y;
-            pt_2d.z = 0.0f; // Project to XY plane
-            cluster_2d->points.push_back(pt_2d);
+        // the only diff from getObstacleBBoxes is center and orientation, mar center is in ground frame, transform to lidar frame
+        RotatedBoundingBox rbbox;
+        Eigen::Vector3f center_ground(mar.center.x(), mar.center.y(), (min_z_cluster + max_z_cluster) / 2.0f);
+        Eigen::Vector3f center_lidar = sensor_inv_transform_ * center_ground;
+        rbbox.center.x = center_lidar.x();
+        rbbox.center.y = center_lidar.y();
+        rbbox.center.z = center_lidar.z();
+        rbbox.size_x = mar.size_x;
+        rbbox.size_y = mar.size_y;
+        rbbox.size_z = max_z_cluster - min_z_cluster;
+        Eigen::AngleAxisf rotation_in_ground(mar.angle, Eigen::Vector3f::UnitZ());
+        Eigen::Matrix3f rotation_mat = sensor_inv_transform_.rotation() * rotation_in_ground.toRotationMatrix();
+        rbbox.orientation = Eigen::Quaternionf(rotation_mat);
+        rbbox.is_ground_aligned = true;
 
-            min_z_cluster = std::min(min_z_cluster, pt.z);
-            max_z_cluster = std::max(max_z_cluster, pt.z);
+        // Filter by a minimum volume or size if needed
+        if (rbbox.size_x > 0.01 && rbbox.size_y > 0.01 && rbbox.size_z > 0.01) {
+            rotated_bboxes.push_back(rbbox);
         }
+    }
+    return rotated_bboxes;
+}
 
-        if (cluster_2d->points.size() < 3) { // Need at least 3 points for a convex hull
-            continue;
-        }
+std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBBoxes(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
+    // input clusters are in lidar frame, output is in lidar frame
+    
+    std::vector<RotatedBoundingBox> rotated_bboxes;
+    for (const auto& current_cluster : clusters) {
+        MinAreaRect mar;
+        float min_z_cluster;
+        float max_z_cluster;
 
-        // 2. Compute 2D Convex Hull
-        pcl::PointCloud<pcl::PointXYZI>::Ptr hull_points(new pcl::PointCloud<pcl::PointXYZI>);
-        pcl::ConvexHull<pcl::PointXYZI> ch;
-        ch.setInputCloud(cluster_2d);
-        ch.reconstruct(*hull_points);
-
-        if (hull_points->points.empty()) {
-            continue;
-        }
-
-        // 3. Apply Rotating Calipers to find Minimum Area Rectangle
-        MinAreaRect mar = findMinAreaRect(hull_points);
+        if(!computeClusterGeom(current_cluster, mar, min_z_cluster, max_z_cluster)) continue;
 
         // 4. Populate RotatedBoundingBox
         RotatedBoundingBox rbbox;
         rbbox.center.x = mar.center.x();
         rbbox.center.y = mar.center.y();
         rbbox.center.z = (min_z_cluster + max_z_cluster) / 2.0f; // Midpoint of actual Z range
-        rbbox.width = mar.width;
-        rbbox.height = mar.height;
-        rbbox.angle = mar.angle;
-        rbbox.min_z_point.z = min_z_cluster;
-        rbbox.max_z_point.z = max_z_cluster;
+        rbbox.size_x = mar.size_x;
+        rbbox.size_y = mar.size_y;
+        rbbox.size_z = max_z_cluster - min_z_cluster;
+        // Create orientation quaternion from angle (rotation around lidar Z-axis only)
+        Eigen::AngleAxisf rotation_z(mar.angle, Eigen::Vector3f::UnitZ());
+        rbbox.orientation = Eigen::Quaternionf(rotation_z);
+        rbbox.is_ground_aligned = false;
 
         // Filter by a minimum volume or size if needed
-        float depth = max_z_cluster - min_z_cluster;
-        if (rbbox.width > 0.01 && rbbox.height > 0.01 && depth > 0.01) {
+        if (rbbox.size_x > 0.01 && rbbox.size_y > 0.01 && rbbox.size_z > 0.01) {
             rotated_bboxes.push_back(rbbox);
         }
     }
@@ -930,8 +1051,8 @@ std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBoundingB
 // Helper function to find the minimum area enclosing rectangle using rotating calipers
 MinAreaRect RangeImageObstacleDetector::findMinAreaRect(const pcl::PointCloud<pcl::PointXYZI>::Ptr& hull_points_2d) {
     MinAreaRect result;
-    result.width = std::numeric_limits<float>::max();
-    result.height = std::numeric_limits<float>::max();
+    result.size_x = std::numeric_limits<float>::max();
+    result.size_y = std::numeric_limits<float>::max();
     result.angle = 0.0f;
     result.center = Eigen::Vector2f(0.0f, 0.0f);
 
@@ -981,8 +1102,8 @@ MinAreaRect RangeImageObstacleDetector::findMinAreaRect(const pcl::PointCloud<pc
 
         if (current_area < min_area) {
             min_area = current_area;
-            result.width = current_width;
-            result.height = current_height;
+            result.size_x = current_width;
+            result.size_y = current_height;
             result.angle = std::atan2(edge_vec.y(), edge_vec.x());
 
             // Calculate center of the bounding box
@@ -1035,25 +1156,23 @@ void RangeImageObstacleDetector::saveRotatedBoundingBoxesToObj(
         const auto& rbbox = rotated_bboxes[i];
 
         // Calculate half dimensions
-        float half_width = rbbox.width / 2.0f;
-        float half_height = rbbox.height / 2.0f;
-        float half_depth = (rbbox.max_z_point.z - rbbox.min_z_point.z) / 2.0f;
+        float half_size_x = rbbox.size_x / 2.0f;
+        float half_size_y = rbbox.size_y / 2.0f;
+        float half_size_z = rbbox.size_z / 2.0f;
 
         // Base points in the local coordinate system of the bbox (before rotation and translation)
         std::vector<Eigen::Vector3f> local_corners = {
-            {-half_width, -half_height, -half_depth}, // 0
-            { half_width, -half_height, -half_depth}, // 1
-            { half_width,  half_height, -half_depth}, // 2
-            {-half_width,  half_height, -half_depth}, // 3
-            {-half_width, -half_height,  half_depth}, // 4
-            { half_width, -half_height,  half_depth}, // 5
-            { half_width,  half_height,  half_depth}, // 6
-            {-half_width,  half_height,  half_depth}  // 7
+            {-half_size_x, -half_size_y, -half_size_z}, // 0
+            { half_size_x, -half_size_y, -half_size_z}, // 1
+            { half_size_x,  half_size_y, -half_size_z}, // 2
+            {-half_size_x,  half_size_y, -half_size_z}, // 3
+            {-half_size_x, -half_size_y,  half_size_z}, // 4
+            { half_size_x, -half_size_y,  half_size_z}, // 5
+            { half_size_x,  half_size_y,  half_size_z}, // 6
+            {-half_size_x,  half_size_y,  half_size_z}  // 7
         };
 
-        // Create rotation matrix around Z-axis
-        Eigen::AngleAxisf rotation_z(rbbox.angle, Eigen::Vector3f::UnitZ());
-        Eigen::Matrix3f rotation_matrix = rotation_z.toRotationMatrix();
+        Eigen::Matrix3f rotation_matrix = rbbox.orientation.toRotationMatrix();
 
         // Translate and rotate each local corner to global coordinates
         Eigen::Vector3f center_eigen(rbbox.center.x, rbbox.center.y, rbbox.center.z);

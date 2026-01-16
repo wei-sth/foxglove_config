@@ -161,10 +161,11 @@ int main(int argc, char * argv[]) {
     // robosense airy 96
     int num_rings = 96;
     int num_sectors = 900;
-    float max_distance = 55.0f; // Aligned with obstacle_detector_node.cpp
+    float max_distance = 1.0f; // Aligned with obstacle_detector_node.cpp
     float min_cluster_z_difference = 0.2f; // Aligned with obstacle_detector_node.cpp
+    // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY
 
-    RangeImageObstacleDetector detector(num_rings, num_sectors, max_distance, min_cluster_z_difference);
+    RangeImageObstacleDetector detector(num_rings, num_sectors, max_distance, min_cluster_z_difference, VisResultType::BBOX_GROUND);
     
     pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw(
         new pcl::PointCloud<PointXYZIRT>);
@@ -215,7 +216,7 @@ int main(int argc, char * argv[]) {
     // detector.saveNongroundBeforeClusteringToPCD(nonground_pcd_path);
     // std::cout << "Range image nonground saved to " << nonground_pcd_path << std::endl;
 
-    std::vector<RotatedBoundingBox> rotated_bboxes = detector.getObstacleBoundingBoxesNewV2(obstacle_clusters);
+    std::vector<RotatedBoundingBox> rotated_bboxes = detector.getVisBBoxes();
     std::cout << "Detected " << rotated_bboxes.size() << " rotated bounding boxes:" << std::endl;
     
     // Save bounding boxes to OBJ file for CloudCompare visualization

@@ -27,7 +27,7 @@ public:
         std::string output_topic = this->get_parameter("output_topic").as_string();
 
         detector_ = std::make_unique<RangeImageObstacleDetector>(
-            num_rings, num_sectors, max_distance, min_cluster_z_difference);
+            num_rings, num_sectors, max_distance, min_cluster_z_difference, VisResultType::BBOX_GROUND);
 
         subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             input_topic, 10, std::bind(&ObstacleDetectorNode::pointCloudCallback, this, std::placeholders::_1));
@@ -47,7 +47,7 @@ private:
         pcl::fromROSMsg(*msg, *cloud_raw);
 
         std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters = detector_->detectObstacles(cloud_raw);
-        std::vector<RotatedBoundingBox> rotated_bboxes = detector_->getObstacleBoundingBoxesNewV2(obstacle_clusters);
+        std::vector<RotatedBoundingBox> rotated_bboxes = detector_->getVisBBoxes();
 
         visualization_msgs::msg::MarkerArray marker_array_msg;
 
@@ -68,18 +68,16 @@ private:
 
             marker.pose.position.x = rbbox.center.x;
             marker.pose.position.y = rbbox.center.y;
-            marker.pose.position.z = (rbbox.min_z_point.z + rbbox.max_z_point.z) / 2.0f; // Center Z
+            marker.pose.position.z = rbbox.center.z;
 
-            // Manually set orientation from yaw angle
-            // Assuming rotation only around Z-axis (yaw)
-            marker.pose.orientation.x = 0.0;
-            marker.pose.orientation.y = 0.0;
-            marker.pose.orientation.z = std::sin(rbbox.angle / 2.0);
-            marker.pose.orientation.w = std::cos(rbbox.angle / 2.0);
+            marker.pose.orientation.x = rbbox.orientation.x();
+            marker.pose.orientation.y = rbbox.orientation.y();
+            marker.pose.orientation.z = rbbox.orientation.z();
+            marker.pose.orientation.w = rbbox.orientation.w();
 
-            marker.scale.x = rbbox.width;
-            marker.scale.y = rbbox.height;
-            marker.scale.z = rbbox.max_z_point.z - rbbox.min_z_point.z;
+            marker.scale.x = rbbox.size_x;
+            marker.scale.y = rbbox.size_y;
+            marker.scale.z = rbbox.size_z;
 
             // Simple color cycling
             marker.color.a = 0.5;
@@ -94,9 +92,9 @@ private:
 
             marker_array_msg.markers.push_back(marker);
 
-            if (rbbox.width > 2.0 || rbbox.height > 2.0) {
-                RCLCPP_WARN(this->get_logger(), "Large rotated bounding box detected! Timestamp: %d_%u, Width: %.2f, Height: %.2f",
-                            msg->header.stamp.sec, msg->header.stamp.nanosec, rbbox.width, rbbox.height);
+            if (rbbox.size_x > 2.0 || rbbox.size_y > 2.0 || rbbox.size_z > 2.0) {
+                RCLCPP_WARN(this->get_logger(), "Large rotated bounding box detected! Timestamp: %d_%u, size_x: %.2f, size_y: %.2f, size_z: %.2f", 
+                            msg->header.stamp.sec, msg->header.stamp.nanosec, rbbox.size_x, rbbox.size_y, rbbox.size_z);
             }
         }
         publisher_->publish(marker_array_msg);

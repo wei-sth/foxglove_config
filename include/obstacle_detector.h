@@ -53,24 +53,27 @@ struct BoundingBox {
     float width, height, depth;
 };
 
+// bbox in lidar frame
 struct RotatedBoundingBox {
     pcl::PointXYZ center;
-    float width, height, angle; // angle in radians
-    pcl::PointXYZ min_z_point; // Store min_z for the cluster
-    pcl::PointXYZ max_z_point; // Store max_z for the cluster
+    float size_x, size_y, size_z;
+    Eigen::Quaternionf orientation;
+    bool is_ground_aligned;    // true: perpendicular to ground plane; false: perpendicular to lidar XY plane
 };
 
 // Helper struct for 2D minimum area rectangle
 struct MinAreaRect {
     Eigen::Vector2f center;
-    float width;
-    float height;
+    float size_x;
+    float size_y;
     float angle; // Angle in radians
 };
 
 struct Cell {
     std::vector<int> point_indices;
 };
+
+enum class VisResultType { BBOX_LIDAR_XY, BBOX_GROUND};
 
 class WildTerrainSegmenter {
 public:
@@ -82,6 +85,7 @@ public:
     float max_range;
     float sensor_height = 0.5; // Sensor installation height relative to ground plane
     float dist_threshold = 0.12; // if distance exceeds dist_threshold: obstacle, if within dist_threshold: ground
+    float normal_z_threshold = 0.7f; // about 45 degree, if fitted plane abs(normal_z) < normal_z_threshold: obstacle
     int num_lpr = 10;         // Take the lowest 10 points as seed points each time
     int num_iter = 3;         // Number of fitting iterations
 
@@ -106,7 +110,7 @@ private:
 class RangeImageObstacleDetector {
 public:
     RangeImageObstacleDetector(int num_rings = 16, int num_sectors = 1800, 
-                               float max_range = 10.0f, float min_cluster_z_difference = 0.1f);
+                               float max_range = 10.0f, float min_cluster_z_difference = 0.1f, VisResultType vis_type = VisResultType::BBOX_LIDAR_XY);
     
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> detectObstacles(pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw);
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> detectObstacles(pcl::PointCloud<RSPointDefault>::Ptr cloud_raw);
@@ -118,8 +122,8 @@ private:
     float sensor_pitch = 0.523599;  // Sensor installation pitch angle relative to ground plane, 30 degree
     float sensor_yaw = 0.0;    // Sensor installation yaw angle relative to ground plane
     
-    Eigen::Affine3f sensor_transform_ = Eigen::Affine3f::Identity();
-    Eigen::Affine3f sensor_inv_transform_ = Eigen::Affine3f::Identity();
+    Eigen::Affine3f sensor_transform_ = Eigen::Affine3f::Identity();  // Lidar -> Ground
+    Eigen::Affine3f sensor_inv_transform_ = Eigen::Affine3f::Identity();  // Ground -> Lidar
     bool apply_sensor_transform_ = false;
 
     void updateSensorTransform();
@@ -128,6 +132,7 @@ private:
     int num_sectors;
     float max_range;
     float min_cluster_z_difference_;
+    VisResultType vis_type_;
     
     cv::Mat range_image_;
     cv::Mat x_image_;
@@ -146,15 +151,21 @@ private:
     Eigen::Vector3f computeNormal(int row, int col);
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clusterEuclidean(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
     std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clusterConnectivity(pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_with_normal_info);
+    bool computeClusterGeom(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cluster, MinAreaRect& mar, float& min_z_cluster, float& max_z_cluster);
     
     WildTerrainSegmenter wild_terrain_segmenter_;
+    std::vector<RotatedBoundingBox> bboxes_lidar_frame_;  // bbox in lidar frame, depending on is_ground_aligned, it can be perpendicular to ground plane or lidar XY plane
 public:
+    const std::vector<RotatedBoundingBox>& getVisBBoxes() const { return bboxes_lidar_frame_; }
     void saveNormalsToPCD(const std::string& path);
 
-    std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNew(
+    std::vector<RotatedBoundingBox> getObstacleBBoxesPCA(
         const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
     
-    std::vector<RotatedBoundingBox> getObstacleBoundingBoxesNewV2(
+    std::vector<RotatedBoundingBox> getObstacleBBoxes(
+        const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
+
+    std::vector<RotatedBoundingBox> getObstacleBBoxesFromGround(
         const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
 
     void saveRotatedBoundingBoxesToObj(
