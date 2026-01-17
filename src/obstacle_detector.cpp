@@ -15,9 +15,8 @@
 #include <cmath> // For std::abs
 #include <chrono>
 
-// Implementation of WildTerrainSegmenter methods
+
 WildTerrainSegmenter::WildTerrainSegmenter(float max_range) : max_range(max_range) {
-    // Other parameters can be initialized here or left with their default values
 }
 
 void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_image, const cv::Mat& y_image, const cv::Mat& z_image, const cv::Mat& valid_mask,
@@ -30,7 +29,7 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
     temp_cloud->points.reserve(range_image.rows * range_image.cols);
     std::vector<int> temp_cloud_indices_map(range_image.rows * range_image.cols, -1); // Map (row, col) to temp_cloud index
 
-    // 1. 极坐标分桶 (Binning)
+    // 1. Polar Binning
     std::vector<std::vector<Cell>> polar_grid(num_rings, std::vector<Cell>(num_sectors));
     int current_point_idx = 0;
     for (int r_img = 0; r_img < range_image.rows; ++r_img) {
@@ -88,7 +87,7 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
 
     debugSavePolarGrid(polar_grid, temp_cloud, "/home/weizh/data/polar_grid.pcd");
 
-    // 2. 逐个 Cell 处理
+    // 2. Process each cell
     struct PlaneParams {
         Eigen::Vector3f normal;
         float d;
@@ -99,12 +98,12 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
     for (int r = 0; r < num_rings; ++r) {
         for (int s = 0; s < num_sectors; ++s) {
             const auto& indices = polar_grid[r][s].point_indices;
-            if (indices.size() < 10) continue; // 点太少不拟合
+            if (indices.size() < 10) continue; // Too few points to fit
 
-            // 提取种子点 (Lowest Point Representative)
+            // Extract seed points (Lowest Point Representative)
             std::vector<int> seed_indices = extract_seeds(temp_cloud, indices);
 
-            // 迭代拟合平面
+            // Iteratively fit plane
             Eigen::Vector3f normal;
             float d;
             float linearity;
@@ -128,9 +127,9 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
                 seed_indices.clear();
                 for (int idx : indices) {
                     const auto& pt = temp_cloud->points[idx].getVector3fMap();
-                    // 计算点到平面的垂直距离
+                    // Calculate vertical distance from point to plane
                     float dist = normal.dot(pt) + d;
-                    // 距离足够近的认为是地面点，参与下一次迭代拟合
+                    // Points close enough are considered ground points and used for the next iteration
                     if (dist < dist_threshold) {
                         seed_indices.push_back(idx);
                     }
@@ -155,7 +154,7 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
                 pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell_final_inlier.pcd", *inlier_cloud);
             }
 
-            // 3. 最终分类
+            // 3. Final classification
             bool contain_obstacle = false;
             for (int idx : indices) {
                 const auto& pt = temp_cloud->points[idx].getVector3fMap();
@@ -166,7 +165,7 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
                     obstacle_cloud->points.push_back(temp_cloud->points[idx]);
                     contain_obstacle = true;
                 } else if (dist < -dist_threshold) {
-                    // 负值代表“凹陷”，可能是坑，割草机也得避开
+                    // Negative values represent "depressions", which could be pits that the mower must avoid
                     obstacle_cloud->points.push_back(temp_cloud->points[idx]);
                     contain_obstacle = true;
                 } else {
@@ -252,17 +251,15 @@ void WildTerrainSegmenter::estimate_plane(const pcl::PointCloud<pcl::PointXYZINo
         cov += vec * vec.transpose();
     }
 
-    // 最小特征值对应的特征向量就是平面的法向量
+    // The eigenvector corresponding to the smallest eigenvalue is the plane normal
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver(cov);
     Eigen::Vector3f eigenvalues = solver.eigenvalues(); // e0 <= e1 <= e2
     // if e0 and e1 are very small compared with e2 -- line, if linearity too small, need double check
     linearity = (eigenvalues(2) > 1e-4) ? (eigenvalues(1) / eigenvalues(2)) : 0.0f;
     normal = solver.eigenvectors().col(0);
     
-    // 确保法向量朝上 (针对机器人坐标系)
+    // Ensure the normal vector points upwards (for the robot coordinate system)
     if (normal.z() < 0) normal = -normal;
-    
-    // d = -n·x
     d = -(normal.dot(mean));
 }
 
