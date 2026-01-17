@@ -15,6 +15,8 @@
 #include <cmath> // For std::abs
 #include <chrono>
 
+static constexpr bool LOCAL_DEBUG = false;
+
 
 WildTerrainSegmenter::WildTerrainSegmenter(float max_range) : max_range(max_range) {
 }
@@ -67,25 +69,26 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
     temp_cloud->height = 1;
     temp_cloud->is_dense = true;
 
-    // debug
-    // float target_x = 7.693483;
-    // float target_y = -0.854771;
-    // float target_z = -0.574363;
-    // float target_x = 0.939290;
-    // float target_y = 0.925231;
-    // float target_z = 0.096044;
-    float target_x = -1.393945;
-    float target_y = 1.085931;
-    float target_z = 3.254558;
-    
-    float target_range = std::sqrt(target_x * target_x + target_y * target_y + target_z * target_z);
-    float target_angle = atan2(target_y, target_x) * 180.0 / M_PI;
-    if (target_angle < 0) target_angle += 360.0;
-    debug_r = std::min(num_rings - 1, (int)(target_range / (max_range / num_rings)));
-    debug_s = std::min(num_sectors - 1, (int)(target_angle / (360.0 / num_sectors)));
-    std::cout << "debug point (" << target_x << ", " << target_y << ", " << target_z << ") belongs to Cell [" << debug_r << ", " << debug_s << "]" << std::endl;
+    if constexpr (LOCAL_DEBUG) {
+        // float target_x = 7.693483;
+        // float target_y = -0.854771;
+        // float target_z = -0.574363;
+        // float target_x = 0.939290;
+        // float target_y = 0.925231;
+        // float target_z = 0.096044;
+        float target_x = -1.393945;
+        float target_y = 1.085931;
+        float target_z = 3.254558;
+        
+        float target_range = std::sqrt(target_x * target_x + target_y * target_y + target_z * target_z);
+        float target_angle = atan2(target_y, target_x) * 180.0 / M_PI;
+        if (target_angle < 0) target_angle += 360.0;
+        debug_r = std::min(num_rings - 1, (int)(target_range / (max_range / num_rings)));
+        debug_s = std::min(num_sectors - 1, (int)(target_angle / (360.0 / num_sectors)));
+        std::cout << "debug point (" << target_x << ", " << target_y << ", " << target_z << ") belongs to Cell [" << debug_r << ", " << debug_s << "]" << std::endl;
 
-    debugSavePolarGrid(polar_grid, temp_cloud, "/home/weizh/data/polar_grid.pcd");
+        debugSavePolarGrid(polar_grid, temp_cloud, "/home/weizh/data/polar_grid.pcd");
+    }
 
     // 2. Process each cell
     struct PlaneParams {
@@ -109,18 +112,20 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
             float linearity;
             estimate_plane(temp_cloud, seed_indices, normal, d, linearity);
 
-            if (r == debug_r && s == debug_s) {
-                std::cout << "Cell [" << r << ", " << s << "] Initial Plane: normal=" << normal.transpose() << ", d=" << d << ", seeds=" << seed_indices.size() << std::endl;
-                
-                // Save cell cloud
-                pcl::PointCloud<pcl::PointXYZINormal>::Ptr cell_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
-                for (int idx : indices) cell_cloud->push_back(temp_cloud->points[idx]);
-                pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell.pcd", *cell_cloud);
+            if constexpr (LOCAL_DEBUG) {
+                if (r == debug_r && s == debug_s) {
+                    std::cout << "Cell [" << r << ", " << s << "] Initial Plane: normal=" << normal.transpose() << ", d=" << d << ", seeds=" << seed_indices.size() << std::endl;
+                    
+                    // Save cell cloud
+                    pcl::PointCloud<pcl::PointXYZINormal>::Ptr cell_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
+                    for (int idx : indices) cell_cloud->push_back(temp_cloud->points[idx]);
+                    pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell.pcd", *cell_cloud);
 
-                // Save seeds
-                pcl::PointCloud<pcl::PointXYZINormal>::Ptr seed_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
-                for (int idx : seed_indices) seed_cloud->push_back(temp_cloud->points[idx]);
-                pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell_seed.pcd", *seed_cloud);
+                    // Save seeds
+                    pcl::PointCloud<pcl::PointXYZINormal>::Ptr seed_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
+                    for (int idx : seed_indices) seed_cloud->push_back(temp_cloud->points[idx]);
+                    pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell_seed.pcd", *seed_cloud);
+                }
             }
 
             for (int iter = 0; iter < num_iter; ++iter) {
@@ -146,12 +151,14 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
             //     std::cout << "Cell [" << r << ", " << s << "] linearity=" << linearity << std::endl;
             // }
 
-            if (r == debug_r && s == debug_s) {
-                std::cout << "Cell [" << r << ", " << s << "] Final Plane: normal=" << normal.transpose() << ", d=" << d << ", seeds=" << seed_indices.size() << std::endl;
-                // Save inliers (final seed_indices after iterations are the inliers)
-                pcl::PointCloud<pcl::PointXYZINormal>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
-                for (int idx : seed_indices) inlier_cloud->push_back(temp_cloud->points[idx]);
-                pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell_final_inlier.pcd", *inlier_cloud);
+            if constexpr (LOCAL_DEBUG) {
+                if (r == debug_r && s == debug_s) {
+                    std::cout << "Cell [" << r << ", " << s << "] Final Plane: normal=" << normal.transpose() << ", d=" << d << ", seeds=" << seed_indices.size() << std::endl;
+                    // Save inliers (final seed_indices after iterations are the inliers)
+                    pcl::PointCloud<pcl::PointXYZINormal>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
+                    for (int idx : seed_indices) inlier_cloud->push_back(temp_cloud->points[idx]);
+                    pcl::io::savePCDFileBinary("/home/weizh/data/debug_cell_final_inlier.pcd", *inlier_cloud);
+                }
             }
 
             // 3. Final classification
@@ -399,35 +406,20 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
     pcl::PointCloud<RSPointDefault>::Ptr cloud_raw) {
     // auto t1 = std::chrono::steady_clock::now();
     auto cloud_filtered_normal = filterByRangeEgo(cloud_raw);
-    
-    // auto t2 = std::chrono::steady_clock::now();
     buildRangeImage(cloud_filtered_normal);
-
-    // auto t3 = std::chrono::steady_clock::now();
     // auto obstacles_with_normal_info = segmentGroundByNormal(); // Original function, commented out
     auto obstacles_with_normal_info = segmentGroundByPatchwork();
 
-    // auto t4 = std::chrono::steady_clock::now();
-
-    // double d1 = std::chrono::duration<double, std::milli>(t2 - t1).count();
-    // double d2 = std::chrono::duration<double, std::milli>(t3 - t2).count();
-    // double d3 = std::chrono::duration<double, std::milli>(t4 - t3).count();
-    // double total = d1 + d2 + d3;
-    // if (total > 0) {
-    //     std::cout << std::fixed << std::setprecision(2);
-    //     std::cout << "total:" << total << "ms,filterByRangeEgo:" << d1 << "ms,buildRangeImage:" << d2 << "ms,segmentGroundByPatchwork:" << d3 << std::endl;
-    // }
-
-    // debug
-    pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_lidar(new pcl::PointCloud<pcl::PointXYZINormal>);  // in lidar frame
-    pcl::copyPointCloud(*obstacles_with_normal_info, *obstacles_lidar);
-    if (apply_sensor_transform_) {
-        pcl::transformPointCloud(*obstacles_lidar, *obstacles_lidar, sensor_inv_transform_);
+    if constexpr (LOCAL_DEBUG) {
+        pcl::PointCloud<pcl::PointXYZINormal>::Ptr obstacles_lidar(new pcl::PointCloud<pcl::PointXYZINormal>);  // in lidar frame
+        pcl::copyPointCloud(*obstacles_with_normal_info, *obstacles_lidar);
+        if (apply_sensor_transform_) {
+            pcl::transformPointCloud(*obstacles_lidar, *obstacles_lidar, sensor_inv_transform_);
+        }
+        pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_lidar);
+        pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster_transformed.pcd", *obstacles_with_normal_info);
     }
-    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster.pcd", *obstacles_lidar);
-    pcl::io::savePCDFileBinary("/home/weizh/data/obstacles_before_cluster_transformed.pcd", *obstacles_with_normal_info);
 
-    // Step 4: Perform clustering using Euclidean method
     // return clusterEuclidean(obstacles_with_normal_info);
     auto clusters = clusterConnectivity(obstacles_with_normal_info);
 
@@ -445,6 +437,11 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
     if (vis_type_ == VisResultType::BBOX_LIDAR_XY) {
         bboxes_lidar_frame_ = getObstacleBBoxes(clusters);
     }
+
+    // auto t2 = std::chrono::steady_clock::now();
+    // double total_d = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    // std::cout << std::fixed << std::setprecision(2);
+    // std::cout << "total duration:" << total_d << "ms" << std::endl;
 
     return clusters;
 }
