@@ -161,7 +161,7 @@ int main(int argc, char * argv[]) {
     // robosense airy 96
     int num_rings = 96;
     int num_sectors = 900;
-    float max_distance = 1.0f; // Aligned with obstacle_detector_node.cpp
+    float max_distance = 10.0f; // Aligned with obstacle_detector_node.cpp
     float min_cluster_z_difference = 0.2f; // Aligned with obstacle_detector_node.cpp
     // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY
 

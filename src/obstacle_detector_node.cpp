@@ -7,15 +7,17 @@
 #include "/home/weizh/foxglove_ws/src/foxglove_config/include/obstacle_detector.h"
 #include <cmath> // For std::sin and std::cos
 
+// robosense airy frame_id: rslidar
+
 class ObstacleDetectorNode : public rclcpp::Node {
 public:
     ObstacleDetectorNode() : Node("obstacle_detector_node") {
         // Declare parameters
-        this->declare_parameter<int>("num_rings", 16);
-        this->declare_parameter<int>("num_sectors", 2000);
+        this->declare_parameter<int>("num_rings", 96);
+        this->declare_parameter<int>("num_sectors", 900);
         this->declare_parameter<float>("max_distance", 10.0f);
         this->declare_parameter<float>("min_cluster_z_difference", 0.2f);
-        this->declare_parameter<std::string>("input_topic", "/unitree/slam_lidar/points");
+        this->declare_parameter<std::string>("input_topic", "/rslidar_points"); // /rslidar_points | /unitree/slam_lidar/points
         this->declare_parameter<std::string>("output_topic", "/obstacle_bbox");
 
         // Get parameters
@@ -43,7 +45,7 @@ private:
     void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
         // RCLCPP_INFO(this->get_logger(), "Received PointCloud2 message.");
 
-        pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw(new pcl::PointCloud<PointXYZIRT>);
+        pcl::PointCloud<RSPointDefault>::Ptr cloud_raw(new pcl::PointCloud<RSPointDefault>);
         pcl::fromROSMsg(*msg, *cloud_raw);
 
         std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters = detector_->detectObstacles(cloud_raw);

@@ -29,13 +29,12 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIRT,
     (uint16_t, ring, ring)
     (float, time, time))
 
-// robosense airy, time is absolute time
+// robosense airy, time is relative time, unit:ns
 struct RSPointDefault {
     PCL_ADD_POINT4D;
     float intensity;
     uint16_t ring;
-    double timestamp;
-    uint8_t feature;
+    uint32_t timestamp;
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 } EIGEN_ALIGN16;
 
@@ -43,8 +42,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(RSPointDefault,
     (float, x, x)(float, y, y)(float, z, z)
     (float, intensity, intensity)
     (uint16_t, ring, ring)
-    (double, timestamp, timestamp)
-    (uint8_t, feature, feature))
+    (uint32_t, timestamp, timestamp))
 
 struct BoundingBox {
     pcl::PointXYZ min_point;
