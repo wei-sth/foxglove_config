@@ -10,25 +10,11 @@ def generate_launch_description():
             arguments=['0', '0', '0', '0', '0', '0', 'camera_color_optical_frame', 'rslidar']
         ),
 
-        Node(
-            package='foxglove_config',
-            executable='map_publisher.py',
-            name='map_publisher',
-            output='screen'
-        ),
-
+        # publish static global map and NavSatFix
         # Node(
         #     package='foxglove_config',
-        #     executable='test_1216.py',
-        #     name='test_1216',
-        #     output='screen'
-        # ),
-
-        # algorithm debug
-        # Node(
-        #     package='foxglove_config',
-        #     executable='obstacle_detector',
-        #     name='obstacle_detector',
+        #     executable='map_publisher.py',
+        #     name='map_publisher',
         #     output='screen'
         # ),
 

@@ -75,9 +75,6 @@ install(TARGETS
 
 install(PROGRAMS
   scripts/map_publisher.py
-  scripts/test_1216.py
-  scripts/pcd.py
-  scripts/util_func.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
