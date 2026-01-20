@@ -4,7 +4,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <visualization_msgs/msg/marker.hpp>
-#include "/home/weizh/foxglove_ws/src/foxglove_config/include/obstacle_detector.h"
+#include "obstacle_detector.h"
 #include <cmath> // For std::sin and std::cos
 
 // robosense airy frame_id: rslidar

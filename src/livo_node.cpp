@@ -1,8 +1,13 @@
 #include "livo_node.h"
 #include <chrono>
+#include <small_gicp/util/downsampling.hpp>
 #include <small_gicp/util/downsampling_omp.hpp>
 // downsample by 0.1m does not improve
 // downsample by 0.2m, setNumNeighborsForCovariance(20) from 40 improves
+// without setting other params (num of threads ...), voxelgrid_sampling_omp seems slower than pcl::VoxelGrid
+// then I change voxelgrid_sampling_omp to voxelgrid_sampling, and set resolution of both source and target to 0.2m (previously source 0.2 and target 0.1), faster
+// todo: check https://github.com/koide3/small_gicp/blob/master/src/benchmark/odometry_benchmark_small_gicp_omp.cpp
+
 
 LivoNode::LivoNode(const rclcpp::NodeOptions & options) : ParamServer("livo", options) {
     sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic,
@@ -255,7 +260,7 @@ void LivoNode::pointCloudPreprocessing() {
         }
     }
 
-    laser_cloud_in_ds = small_gicp::voxelgrid_sampling_omp(*laser_cloud_in, 0.2);
+    laser_cloud_in_ds = small_gicp::voxelgrid_sampling(*laser_cloud_in, 0.2);
 }
 
 void LivoNode::performOdometer() {
@@ -356,12 +361,8 @@ void LivoNode::performOdometer_v1() {
         pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
         *local_map += *cloud_world;
 
-        pcl::VoxelGrid<PointType> dsFilter;
-        dsFilter.setInputCloud(local_map);
-        dsFilter.setLeafSize(0.1, 0.1, 0.1);
-        pcl::PointCloud<PointType>::Ptr filtered_map(new pcl::PointCloud<PointType>());
-        dsFilter.filter(*filtered_map);
-        local_map = filtered_map;
+        // source and target should have the same resolution for vgicp
+        local_map = small_gicp::voxelgrid_sampling(*local_map, 0.2);
 
         last_key_pose = current_pose;
     }
@@ -379,12 +380,7 @@ void LivoNode::updateLocalMap() {
 
     // 简单的局部地图规模控制：如果点数过多，进行体素滤波
     if (local_map->size() > 100000) {
-        pcl::VoxelGrid<PointType> dsFilter;
-        dsFilter.setInputCloud(local_map);
-        dsFilter.setLeafSize(0.5, 0.5, 0.5);
-        pcl::PointCloud<PointType>::Ptr filtered_map(new pcl::PointCloud<PointType>());
-        dsFilter.filter(*filtered_map);
-        local_map = filtered_map;
+        local_map = small_gicp::voxelgrid_sampling(*local_map, 0.5);
     }
 }
 

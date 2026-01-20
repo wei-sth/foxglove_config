@@ -1,5 +1,5 @@
 #include <pcl/io/pcd_io.h>
-#include "/home/weizh/foxglove_ws/src/foxglove_config/include/obstacle_detector.h"
+#include "obstacle_detector.h"
 
 #include <pcl/filters/passthrough.h>
 #include <pcl/segmentation/extract_clusters.h>
@@ -425,6 +425,9 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
 
     if (vis_type_ == VisResultType::BBOX_GROUND) {
         bboxes_lidar_frame_ = getObstacleBBoxesFromGround(clusters);
+    }
+    else if (vis_type_ == VisResultType::BBOX_GROUND_2D) {
+        bboxes_2d_ground_ = getObstacleBBoxes2DFromGround(clusters);
     }
 
     // transform clusters back to original sensor frame
@@ -976,6 +979,39 @@ bool RangeImageObstacleDetector::computeClusterGeom(const pcl::PointCloud<pcl::P
     return true;
 }
 
+std::vector<ObstacleBBox2D> RangeImageObstacleDetector::getObstacleBBoxes2DFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
+    // input clusters are in ground frame, output is in ground frame
+    std::vector<ObstacleBBox2D> bboxes_2d;
+    for (const auto& current_cluster : clusters) {
+        MinAreaRect mar;
+        float min_z_cluster;
+        float max_z_cluster;
+
+        if (!computeClusterGeom(current_cluster, mar, min_z_cluster, max_z_cluster)) continue;
+
+        ObstacleBBox2D bbox;
+        float cos_a = std::cos(mar.angle);
+        float sin_a = std::sin(mar.angle);
+
+        // Local corners relative to center
+        float dx = mar.size_x / 2.0f;
+        float dy = mar.size_y / 2.0f;
+
+        Eigen::Vector2f local_corners[4] = {
+            {-dx, -dy},
+            {dx, -dy},
+            {dx, dy},
+            {-dx, dy}};
+
+        for (int i = 0; i < 4; ++i) {
+            bbox.corners[i].x() = mar.center.x() + local_corners[i].x() * cos_a - local_corners[i].y() * sin_a;
+            bbox.corners[i].y() = mar.center.y() + local_corners[i].x() * sin_a + local_corners[i].y() * cos_a;
+        }
+        bboxes_2d.push_back(bbox);
+    }
+    return bboxes_2d;
+}
+
 std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBBoxesFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
     // input clusters are in ground frame, output is in lidar frame
     
@@ -1200,4 +1236,18 @@ void RangeImageObstacleDetector::saveRotatedBoundingBoxesToObj(
 
     obj_file.close();
     std::cout << "Saved " << rotated_bboxes.size() << " bounding boxes to " << file_path << std::endl;
+}
+
+void RangeImageObstacleDetector::saveObstacleBBoxes2DToJson(
+    const std::vector<ObstacleBBox2D>& bboxes_2d,
+    const std::string& file_path) {
+    nlohmann::json j = bboxes_2d;
+    std::ofstream json_file(file_path);
+    if (json_file.is_open()) {
+        json_file << j.dump(4);
+        json_file.close();
+        std::cout << "Saved " << bboxes_2d.size() << " 2D bounding boxes to " << file_path << std::endl;
+    } else {
+        std::cerr << "Error: Could not open JSON file for writing: " << file_path << std::endl;
+    }
 }

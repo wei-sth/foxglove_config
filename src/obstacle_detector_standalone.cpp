@@ -3,7 +3,7 @@
 #include <pcl/sample_consensus/model_types.h>
 #include <pcl/segmentation/sac_segmentation.h>
 #include <Eigen/Geometry>
-#include "/home/weizh/foxglove_ws/src/foxglove_config/include/obstacle_detector.h"
+#include "obstacle_detector.h"
 #include <cmath>
 
 #ifndef M_PI
@@ -163,24 +163,9 @@ int main(int argc, char * argv[]) {
     int num_sectors = 900;
     float max_distance = 10.0f; // Aligned with obstacle_detector_node.cpp
     float min_cluster_z_difference = 0.2f; // Aligned with obstacle_detector_node.cpp
-    // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY
+    VisResultType vis_type = VisResultType::BBOX_GROUND_2D; // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY | VisResultType::BBOX_GROUND_2D
 
-    RangeImageObstacleDetector detector(num_rings, num_sectors, max_distance, min_cluster_z_difference, VisResultType::BBOX_GROUND);
-    
-    pcl::PointCloud<PointXYZIRT>::Ptr cloud_raw(
-        new pcl::PointCloud<PointXYZIRT>);
-    // std::string pcd_file_path = "/home/weizh/data/bag_11261/bag_11261_0_logs/unitree_slam_lidar_points/1764126218_844803835.pcd";
-    // 1764126140_046829002
-    // 1764126144_944283160
-    // 1764126158_346454512
-    std::string pcd_file_path = "/home/weizh/data/bag_11261/bag_11261_0_logs/unitree_slam_lidar_points/1764126158_346454512.pcd";
-
-    if (pcl::io::loadPCDFile<PointXYZIRT>(pcd_file_path, *cloud_raw) == -1) {
-        PCL_ERROR("Couldn't read file %s \n", pcd_file_path.c_str());
-        return (-1);
-    }
-    std::cout << "Loaded " << cloud_raw->width * cloud_raw->height
-                << " data points from " << pcd_file_path << std::endl;
+    RangeImageObstacleDetector detector(num_rings, num_sectors, max_distance, min_cluster_z_difference, vis_type);
 
     // load PointXYZI and convert to PointXYZIRT
     // std::string pcd_file_path_rs = "/home/weizh/data/bag_2026_0109/rosbag2_2026_01_08-18_38_26_0_logs/rslidar_points/755_603190160.pcd";
@@ -193,7 +178,7 @@ int main(int argc, char * argv[]) {
 
     // load RSPointDefault
     pcl::PointCloud<RSPointDefault>::Ptr rs_cloud_raw(new pcl::PointCloud<RSPointDefault>);
-    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_01_14-17_06_23/rosbag2_2026_01_14-17_06_23_0_logs/rslidar_points/592_403189080.pcd";
+    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_01_15-18_56_42/rosbag2_2026_01_15-18_56_42_0_logs/rslidar_points/1768474602_603222847.pcd";
     if (pcl::io::loadPCDFile<RSPointDefault>(rs_pcd_file_path, *rs_cloud_raw) == -1) {
         PCL_ERROR("Couldn't read file %s \n", rs_pcd_file_path.c_str());
         return (-1);
@@ -216,14 +201,23 @@ int main(int argc, char * argv[]) {
     // detector.saveNongroundBeforeClusteringToPCD(nonground_pcd_path);
     // std::cout << "Range image nonground saved to " << nonground_pcd_path << std::endl;
 
-    std::vector<RotatedBoundingBox> rotated_bboxes = detector.getVisBBoxes();
-    std::cout << "Detected " << rotated_bboxes.size() << " rotated bounding boxes:" << std::endl;
-    
-    // Save bounding boxes to OBJ file for CloudCompare visualization
-    std::string bbox_obj_path = "/home/weizh/data/obstacle_bboxes.obj";
-    detector.saveRotatedBoundingBoxesToObj(rotated_bboxes, bbox_obj_path); // Now generates MTL with transparency
-    std::cout << "Rotated bounding boxes saved to " << bbox_obj_path << " (with transparency via MTL)" << std::endl;
+    if (vis_type == VisResultType::BBOX_GROUND) {
+        std::vector<RotatedBoundingBox> rotated_bboxes = detector.getVisBBoxes();
+        std::cout << "Detected " << rotated_bboxes.size() << " rotated bounding boxes:" << std::endl;
+        
+        // Save bounding boxes to OBJ file for CloudCompare visualization
+        std::string bbox_obj_path = "/home/weizh/data/obstacle_bboxes.obj";
+        detector.saveRotatedBoundingBoxesToObj(rotated_bboxes, bbox_obj_path); // Now generates MTL with transparency
+        std::cout << "Rotated bounding boxes saved to " << bbox_obj_path << " (with transparency via MTL)" << std::endl;
+    }
+    else if (vis_type == VisResultType::BBOX_GROUND_2D) {
+        std::vector<ObstacleBBox2D> rotated_bboxes_2d = detector.getVisBBoxes2D();
+        std::cout << "Detected " << rotated_bboxes_2d.size() << " rotated bounding boxes:" << std::endl;
 
+        std::string bbox_json_path = "/home/weizh/data/obstacle_bboxes.json";
+        detector.saveObstacleBBoxes2DToJson(rotated_bboxes_2d, bbox_json_path); // Now generates MTL with transparency
+        std::cout << "Rotated bounding boxes saved to " << bbox_json_path << std::endl;
+    }
     // visualization
     pcl::PointCloud<pcl::PointXYZI>::Ptr all_obstacles(new pcl::PointCloud<pcl::PointXYZI>);
     for (const auto& cluster : obstacle_clusters) {

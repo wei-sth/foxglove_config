@@ -13,8 +13,9 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <nlohmann/json.hpp>
 
-// for xt16, time is relative time, unit: ns 
+// for xt16, time is relative time, unit: ns
 struct PointXYZIRT {
     PCL_ADD_POINT4D;
     float intensity;
@@ -67,11 +68,24 @@ struct MinAreaRect {
     float angle; // Angle in radians
 };
 
+struct ObstacleBBox2D {
+    Eigen::Vector2f corners[4];
+};
+
+inline void to_json(nlohmann::json& j, const ObstacleBBox2D& bbox) {
+    j = nlohmann::json{{"corners", {
+        {{"x", bbox.corners[0].x()}, {"y", bbox.corners[0].y()}},
+        {{"x", bbox.corners[1].x()}, {"y", bbox.corners[1].y()}},
+        {{"x", bbox.corners[2].x()}, {"y", bbox.corners[2].y()}},
+        {{"x", bbox.corners[3].x()}, {"y", bbox.corners[3].y()}}
+    }}};
+}
+
 struct Cell {
     std::vector<int> point_indices;
 };
 
-enum class VisResultType { BBOX_LIDAR_XY, BBOX_GROUND};
+enum class VisResultType { BBOX_LIDAR_XY, BBOX_GROUND, BBOX_GROUND_2D};
 
 class WildTerrainSegmenter {
 public:
@@ -153,21 +167,23 @@ private:
     
     WildTerrainSegmenter wild_terrain_segmenter_;
     std::vector<RotatedBoundingBox> bboxes_lidar_frame_;  // bbox in lidar frame, depending on is_ground_aligned, it can be perpendicular to ground plane or lidar XY plane
+    std::vector<ObstacleBBox2D> bboxes_2d_ground_;
 public:
     const std::vector<RotatedBoundingBox>& getVisBBoxes() const { return bboxes_lidar_frame_; }
+    const std::vector<ObstacleBBox2D>& getVisBBoxes2D() const { return bboxes_2d_ground_; }
     void saveNormalsToPCD(const std::string& path);
 
-    std::vector<RotatedBoundingBox> getObstacleBBoxesPCA(
-        const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
-    
-    std::vector<RotatedBoundingBox> getObstacleBBoxes(
-        const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
-
-    std::vector<RotatedBoundingBox> getObstacleBBoxesFromGround(
-        const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
+    std::vector<RotatedBoundingBox> getObstacleBBoxesPCA(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
+    std::vector<RotatedBoundingBox> getObstacleBBoxes(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
+    std::vector<ObstacleBBox2D> getObstacleBBoxes2DFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
+    std::vector<RotatedBoundingBox> getObstacleBBoxesFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
 
     void saveRotatedBoundingBoxesToObj(
         const std::vector<RotatedBoundingBox>& rotated_bboxes,
+        const std::string& file_path);
+
+    void saveObstacleBBoxes2DToJson(
+        const std::vector<ObstacleBBox2D>& bboxes_2d,
         const std::string& file_path);
 
     // Helper function for rotating calipers
