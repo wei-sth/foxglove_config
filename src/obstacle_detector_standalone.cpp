@@ -6,59 +6,6 @@
 #include "obstacle_detector.h"
 #include <cmath>
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-/**
- * @brief Load a PointXYZI PCD file and convert it to PointXYZIRT.
- *        Ring and time are calculated based on vertical and horizontal angles.
- * 
- * @param pcd_file_path Path to the input PCD file.
- * @return pcl::PointCloud<PointXYZIRT>::Ptr The converted point cloud.
- */
-pcl::PointCloud<PointXYZIRT>::Ptr loadPCDAsIRT(const std::string& pcd_file_path) {
-    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_i(new pcl::PointCloud<pcl::PointXYZI>);
-    if (pcl::io::loadPCDFile<pcl::PointXYZI>(pcd_file_path, *cloud_i) == -1) {
-        PCL_ERROR("Couldn't read file %s \n", pcd_file_path.c_str());
-        return nullptr;
-    }
-
-    pcl::PointCloud<PointXYZIRT>::Ptr cloud_irt(new pcl::PointCloud<PointXYZIRT>);
-    cloud_irt->header = cloud_i->header;
-    cloud_irt->width = cloud_i->width;
-    cloud_irt->height = cloud_i->height;
-    cloud_irt->is_dense = cloud_i->is_dense;
-    cloud_irt->points.resize(cloud_i->points.size());
-
-    for (size_t i = 0; i < cloud_i->points.size(); ++i) {
-        const auto& pt_i = cloud_i->points[i];
-        auto& pt_irt = cloud_irt->points[i];
-
-        pt_irt.x = pt_i.x;
-        pt_irt.y = pt_i.y;
-        pt_irt.z = pt_i.z;
-        pt_irt.intensity = pt_i.intensity;
-
-        // Calculate vertical angle to determine ring index
-        float v_angle_deg = std::atan2(pt_i.z, std::sqrt(pt_i.x * pt_i.x + pt_i.y * pt_i.y)) * 180.0 / M_PI;
-        
-        // Map vertical angle to ring index for RoboSense Airy (96 lines)
-        // Adjusted range to [1.5, 34.0] degrees (total 32.5 degrees) based on data analysis.
-        // This ensures the minimum ring starts at 0 and maximizes vertical resolution.
-        int ring = std::floor((v_angle_deg - 1.5) * (96.0 / 32.5));
-        if (ring < 0) ring = 0;
-        if (ring >= 96) ring = 95;
-        pt_irt.ring = static_cast<uint16_t>(ring);
-
-        // Calculate horizontal angle (azimuth) for time
-        float h_angle = std::atan2(pt_i.y, pt_i.x);
-        // Map azimuth [-PI, PI] to [0, 1] as a proxy for time within one scan
-        pt_irt.time = (h_angle + M_PI) / (2.0 * M_PI);
-    }
-    return cloud_irt;
-}
-
 // Get Lidar extrinsic parameters by fitting a plane to ground points.
 // Input PCD file should only contain xyz since cloudcompare changes scalar field type. In cloudcompare, use Edit -> Scalar fields -> Delete all.
 void getLidarExtrinsic(const std::string& pcd_file_path) {
@@ -163,22 +110,11 @@ int main(int argc, char * argv[]) {
     int num_sectors = 900;
     float max_distance = 10.0f; // Aligned with obstacle_detector_node.cpp
     float min_cluster_z_difference = 0.2f; // Aligned with obstacle_detector_node.cpp
-    VisResultType vis_type = VisResultType::BBOX_GROUND_2D; // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY | VisResultType::BBOX_GROUND_2D
+    VisResultType vis_type = VisResultType::BBOX_GROUND; // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY | VisResultType::BBOX_GROUND_2D
 
     RangeImageObstacleDetector detector(num_rings, num_sectors, max_distance, min_cluster_z_difference, vis_type);
-
-    // load PointXYZI and convert to PointXYZIRT
-    // std::string pcd_file_path_rs = "/home/weizh/data/bag_2026_0109/rosbag2_2026_01_08-18_38_26_0_logs/rslidar_points/755_603190160.pcd";
-    // pcl::PointCloud<PointXYZIRT>::Ptr cloud_converted = loadPCDAsIRT(pcd_file_path_rs);
-    // if (cloud_converted) {
-    //     std::string converted_pcd_path = "/home/weizh/data/converted_irt_0113.pcd";
-    //     pcl::io::savePCDFileBinary(converted_pcd_path, *cloud_converted);
-    //     std::cout << "Converted PointXYZIRT saved to " << converted_pcd_path << std::endl;
-    // }
-
-    // load RSPointDefault
     pcl::PointCloud<RSPointDefault>::Ptr rs_cloud_raw(new pcl::PointCloud<RSPointDefault>);
-    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_01_15-18_56_42/rosbag2_2026_01_15-18_56_42_0_logs/rslidar_points/1768474602_603222847.pcd";
+    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_01_20-15_09_01/rosbag2_2026_01_20-15_09_01_0_logs/rslidar_points/1768892941_704764128.pcd";
     if (pcl::io::loadPCDFile<RSPointDefault>(rs_pcd_file_path, *rs_cloud_raw) == -1) {
         PCL_ERROR("Couldn't read file %s \n", rs_pcd_file_path.c_str());
         return (-1);
@@ -191,15 +127,6 @@ int main(int argc, char * argv[]) {
     std::string normals_pcd_path = "/home/weizh/data/range_image_normals.pcd";
     detector.saveNormalsToPCD(normals_pcd_path);
     std::cout << "Range image normals saved to " << normals_pcd_path << std::endl;
-
-    // for patchwork++
-    // std::string ground_pcd_path = "/home/weizh/data/range_image_ground.pcd";
-    // detector.saveGroundToPCD(ground_pcd_path);
-    // std::cout << "Range image ground saved to " << ground_pcd_path << std::endl;
-
-    // std::string nonground_pcd_path = "/home/weizh/data/range_image_nonground.pcd";
-    // detector.saveNongroundBeforeClusteringToPCD(nonground_pcd_path);
-    // std::cout << "Range image nonground saved to " << nonground_pcd_path << std::endl;
 
     if (vis_type == VisResultType::BBOX_GROUND) {
         std::vector<RotatedBoundingBox> rotated_bboxes = detector.getVisBBoxes();

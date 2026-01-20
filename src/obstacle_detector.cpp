@@ -324,17 +324,19 @@ RangeImageObstacleDetector::RangeImageObstacleDetector(int num_rings, int num_se
 
 void RangeImageObstacleDetector::updateSensorTransform() {
     apply_sensor_transform_ = true;
-    // only keep rotation, the last row and col must be 0,0,0,1, since filter by distance is distance from liar origin (0,0,0), and range image is built on lidar origin, so the lidar origin should not change
+    // only keep rotation, the last row and col must be 0,0,0,1, since filter by distance is distance from lidar origin (0,0,0), and range image is built on lidar origin, so the lidar origin should not change
     // mower
     // sensor_transform_.matrix() << 0.882501, -0.0144251, 0.470089, 0,
     //                              -0, 0.99953, 0.0306714, 0,
     //                              -0.470311, -0.0270675, 0.882086, 0,
     //                              0, 0, 0, 1;
-    // chair, indoor
+    // mower, front-left-up
     sensor_transform_.matrix() << 0.883228, -0.0186038, 0.468574, 0,
                                   0, 0.999213, 0.0396717, 0,
                                   -0.468943, -0.0350392, 0.882533, 0,
                                   0, 0, 0, 1;
+    // front-left-up to right-front-up
+    sensor_transform_.prerotate((Eigen::Matrix3f() << 0, -1, 0, 1, 0, 0, 0, 0, 1).finished());
     sensor_inv_transform_ = sensor_transform_.inverse();
 
     // if (std::abs(sensor_roll) < 1e-6 && std::abs(sensor_pitch) < 1e-6 && std::abs(sensor_yaw) < 1e-6) {
