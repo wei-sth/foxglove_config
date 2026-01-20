@@ -94,10 +94,10 @@ private:
 
             marker_array_msg.markers.push_back(marker);
 
-            if (rbbox.size_x > 2.0 || rbbox.size_y > 2.0 || rbbox.size_z > 2.0) {
-                RCLCPP_WARN(this->get_logger(), "Large rotated bounding box detected! Timestamp: %d_%u, size_x: %.2f, size_y: %.2f, size_z: %.2f", 
-                            msg->header.stamp.sec, msg->header.stamp.nanosec, rbbox.size_x, rbbox.size_y, rbbox.size_z);
-            }
+            // if (rbbox.size_x > 2.0 || rbbox.size_y > 2.0 || rbbox.size_z > 2.0) {
+            //     RCLCPP_WARN(this->get_logger(), "Large rotated bounding box detected! Timestamp: %d_%u, size_x: %.2f, size_y: %.2f, size_z: %.2f", 
+            //                 msg->header.stamp.sec, msg->header.stamp.nanosec, rbbox.size_x, rbbox.size_y, rbbox.size_z);
+            // }
         }
         publisher_->publish(marker_array_msg);
         // RCLCPP_INFO(this->get_logger(), "Published %zu rotated bounding box markers.", rotated_bboxes.size());

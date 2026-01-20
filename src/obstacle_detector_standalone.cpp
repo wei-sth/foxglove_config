@@ -236,7 +236,17 @@ int main(int argc, char * argv[]) {
 
 
     // calibration
-    getLidarExtrinsic("/home/weizh/data/592_403189080_ground.pcd");
+    getLidarExtrinsic("/home/weizh/data/1768892940_599927902_ground.pcd");
 
     return 0;
 }
+
+// --- Lidar Extrinsic Calibration ---
+// Plane equation: -0.468943x + -0.0350392y + 0.882533z + 0.612313 = 0
+// Distance from (0,0,0) to ground plane: 0.612313 meters
+// Transformation Matrix (Lidar -> Ground):
+//   0.883228 -0.0186038   0.468574          0
+//         -0   0.999213  0.0396717          0
+//  -0.468943 -0.0350392   0.882533   0.612313
+//          0          0          0          1
+// -----------------------------------

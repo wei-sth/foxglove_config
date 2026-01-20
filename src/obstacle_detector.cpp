@@ -186,54 +186,54 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
         }
     }
 
-    // 4. Global Consistency Check (Reporting only)
-    for (int r = 1; r < num_rings; ++r) {
-        for (int s = 0; s < num_sectors; ++s) {
-            if (cell_planes[r][s].valid && cell_planes[r-1][s].valid) {
-                // Only check if both are ground-like (not walls)
-                if (std::abs(cell_planes[r][s].normal.z()) > normal_z_threshold &&
-                    std::abs(cell_planes[r-1][s].normal.z()) > normal_z_threshold) {
+    // // 4. Global Consistency Check (Reporting only)
+    // for (int r = 1; r < num_rings; ++r) {
+    //     for (int s = 0; s < num_sectors; ++s) {
+    //         if (cell_planes[r][s].valid && cell_planes[r-1][s].valid) {
+    //             // Only check if both are ground-like (not walls)
+    //             if (std::abs(cell_planes[r][s].normal.z()) > normal_z_threshold &&
+    //                 std::abs(cell_planes[r-1][s].normal.z()) > normal_z_threshold) {
                     
-                    float R = r * (max_range / num_rings);
-                    float angle_deg = (s + 0.5f) * (360.0f / num_sectors);
-                    float angle_rad = angle_deg * M_PI / 180.0f;
-                    float x = R * std::cos(angle_rad);
-                    float y = R * std::sin(angle_rad);
+    //                 float R = r * (max_range / num_rings);
+    //                 float angle_deg = (s + 0.5f) * (360.0f / num_sectors);
+    //                 float angle_rad = angle_deg * M_PI / 180.0f;
+    //                 float x = R * std::cos(angle_rad);
+    //                 float y = R * std::sin(angle_rad);
                     
-                    float z_prev = -(cell_planes[r-1][s].normal.x() * x + cell_planes[r-1][s].normal.y() * y + cell_planes[r-1][s].d) / cell_planes[r-1][s].normal.z();
-                    float z_curr = -(cell_planes[r][s].normal.x() * x + cell_planes[r][s].normal.y() * y + cell_planes[r][s].d) / cell_planes[r][s].normal.z();
+    //                 float z_prev = -(cell_planes[r-1][s].normal.x() * x + cell_planes[r-1][s].normal.y() * y + cell_planes[r-1][s].d) / cell_planes[r-1][s].normal.z();
+    //                 float z_curr = -(cell_planes[r][s].normal.x() * x + cell_planes[r][s].normal.y() * y + cell_planes[r][s].d) / cell_planes[r][s].normal.z();
                     
-                    if (std::abs(z_prev - z_curr) > 0.15f) {
-                        std::cout << "[Consistency Check] Radial discontinuity detected between Cell [" << r-1 << "," << s << "] and [" << r << "," << s << "]: delta_z=" << std::abs(z_prev - z_curr) << "m" << std::endl;
-                    }
-                }
-            }
-        }
-    }
+    //                 if (std::abs(z_prev - z_curr) > 0.15f) {
+    //                     std::cout << "[Consistency Check] Radial discontinuity detected between Cell [" << r-1 << "," << s << "] and [" << r << "," << s << "]: delta_z=" << std::abs(z_prev - z_curr) << "m" << std::endl;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 
-    // Angular check
-    for (int r = 0; r < num_rings; ++r) {
-        for (int s = 0; s < num_sectors; ++s) {
-            int s_next = (s + 1) % num_sectors;
-            if (cell_planes[r][s].valid && cell_planes[r][s_next].valid) {
-                if (std::abs(cell_planes[r][s].normal.z()) > normal_z_threshold &&
-                    std::abs(cell_planes[r][s_next].normal.z()) > normal_z_threshold) {
+    // // Angular check
+    // for (int r = 0; r < num_rings; ++r) {
+    //     for (int s = 0; s < num_sectors; ++s) {
+    //         int s_next = (s + 1) % num_sectors;
+    //         if (cell_planes[r][s].valid && cell_planes[r][s_next].valid) {
+    //             if (std::abs(cell_planes[r][s].normal.z()) > normal_z_threshold &&
+    //                 std::abs(cell_planes[r][s_next].normal.z()) > normal_z_threshold) {
                     
-                    float R = (r + 0.5f) * (max_range / num_rings);
-                    float angle_rad = (s + 1.0f) * (360.0f / num_sectors) * M_PI / 180.0f;
-                    float x = R * std::cos(angle_rad);
-                    float y = R * std::sin(angle_rad);
+    //                 float R = (r + 0.5f) * (max_range / num_rings);
+    //                 float angle_rad = (s + 1.0f) * (360.0f / num_sectors) * M_PI / 180.0f;
+    //                 float x = R * std::cos(angle_rad);
+    //                 float y = R * std::sin(angle_rad);
                     
-                    float z_curr = -(cell_planes[r][s].normal.x() * x + cell_planes[r][s].normal.y() * y + cell_planes[r][s].d) / cell_planes[r][s].normal.z();
-                    float z_next = -(cell_planes[r][s_next].normal.x() * x + cell_planes[r][s_next].normal.y() * y + cell_planes[r][s_next].d) / cell_planes[r][s_next].normal.z();
+    //                 float z_curr = -(cell_planes[r][s].normal.x() * x + cell_planes[r][s].normal.y() * y + cell_planes[r][s].d) / cell_planes[r][s].normal.z();
+    //                 float z_next = -(cell_planes[r][s_next].normal.x() * x + cell_planes[r][s_next].normal.y() * y + cell_planes[r][s_next].d) / cell_planes[r][s_next].normal.z();
                     
-                    if (std::abs(z_curr - z_next) > 0.15f) {
-                        std::cout << "[Consistency Check] Angular discontinuity detected between Cell [" << r << "," << s << "] and [" << r << "," << s_next << "]: delta_z=" << std::abs(z_curr - z_next) << "m" << std::endl;
-                    }
-                }
-            }
-        }
-    }
+    //                 if (std::abs(z_curr - z_next) > 0.15f) {
+    //                     std::cout << "[Consistency Check] Angular discontinuity detected between Cell [" << r << "," << s << "] and [" << r << "," << s_next << "]: delta_z=" << std::abs(z_curr - z_next) << "m" << std::endl;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 std::vector<int> WildTerrainSegmenter::extract_seeds(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud, const std::vector<int>& indices) {
@@ -331,9 +331,9 @@ void RangeImageObstacleDetector::updateSensorTransform() {
     //                              -0.470311, -0.0270675, 0.882086, 0,
     //                              0, 0, 0, 1;
     // chair, indoor
-    sensor_transform_.matrix() << 0.859627, 0.0152364, 0.510695, 0,
-                                  0, 0.999555, -0.0298213, 0,
-                                  -0.510922, 0.0256352, 0.859245, 0,
+    sensor_transform_.matrix() << 0.883228, -0.0186038, 0.468574, 0,
+                                  0, 0.999213, 0.0396717, 0,
+                                  -0.468943, -0.0350392, 0.882533, 0,
                                   0, 0, 0, 1;
     sensor_inv_transform_ = sensor_transform_.inverse();
 
@@ -1126,6 +1126,7 @@ MinAreaRect RangeImageObstacleDetector::findMinAreaRect(const pcl::PointCloud<pc
             max_proj_perp = std::max(max_proj_perp, proj_perp);
         }
 
+        // width is length along edge_vec direction, height is length along perp_vec direction, angle is the direction of edge_vec
         float current_width = max_proj_edge - min_proj_edge;
         float current_height = max_proj_perp - min_proj_perp;
         float current_area = current_width * current_height;

@@ -23,18 +23,18 @@ def generate_launch_description():
             executable='obstacle_detector_node',
             name='obstacle_detector_node',
             output='screen'
-        ),
-
-        Node(
-            package='foxglove_bridge',
-            executable='foxglove_bridge',
-            name='foxglove_bridge',
-            parameters=[{
-                'port': 8765,
-                'address': '0.0.0.0',
-                'send_buffer_limit': 10000000,
-                'use_compression': True,
-            }],
-            output='screen'
         )
+
+        # Node(
+        #     package='foxglove_bridge',
+        #     executable='foxglove_bridge',
+        #     name='foxglove_bridge',
+        #     parameters=[{
+        #         'port': 8765,
+        #         'address': '0.0.0.0',
+        #         'send_buffer_limit': 10000000,
+        #         'use_compression': True,
+        #     }],
+        #     output='screen'
+        # )
     ])
