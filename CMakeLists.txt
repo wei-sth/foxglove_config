@@ -26,6 +26,7 @@ find_package(pcl_conversions REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(PahoMqttCpp REQUIRED)
 
 set(ros2_lib "rclcpp;rclpy;std_msgs;sensor_msgs;geometry_msgs;nav_msgs;cv_bridge;pcl_msgs;pcl_conversions;visualization_msgs;tf2;tf2_ros;tf2_eigen;tf2_sensor_msgs;tf2_geometry_msgs;nlohmann_json")
 
@@ -59,6 +60,7 @@ target_link_libraries(obstacle_detector_node
   ${PCL_LIBRARIES}
   ${OpenCV_LIBS}
   nlohmann_json::nlohmann_json
+  PahoMqttCpp::paho-mqttpp3
 )
 target_link_libraries(test_vgicp
   ${PCL_LIBRARIES}

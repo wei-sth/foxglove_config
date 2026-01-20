@@ -6,12 +6,29 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include "obstacle_detector.h"
 #include <cmath> // For std::sin and std::cos
+#include <mqtt/async_client.h>
 
 // robosense airy frame_id: rslidar
 
 class ObstacleDetectorNode : public rclcpp::Node {
 public:
-    ObstacleDetectorNode() : Node("obstacle_detector_node") {
+    ObstacleDetectorNode() 
+    : Node("obstacle_detector_node"),
+      mqtt_client_("tcp://124.221.132.177:1883", "obstacle_detector_node_client") {
+        // Configure MQTT
+        mqtt_conn_opts_.set_user_name("zbtest");
+        mqtt_conn_opts_.set_password("zbtest");
+        mqtt_conn_opts_.set_keep_alive_interval(20);
+        mqtt_conn_opts_.set_clean_session(true);
+        mqtt_conn_opts_.set_automatic_reconnect(true);
+
+        try {
+            mqtt_client_.connect(mqtt_conn_opts_)->wait();
+            RCLCPP_INFO(this->get_logger(), "Connected to MQTT Broker: 124.221.132.177");
+        } catch (const mqtt::exception& exc) {
+            RCLCPP_ERROR(this->get_logger(), "MQTT Connection failed: %s", exc.what());
+        }
+
         // Declare parameters
         this->declare_parameter<int>("num_rings", 96);
         this->declare_parameter<int>("num_sectors", 900);
@@ -101,8 +118,22 @@ private:
         }
         publisher_->publish(marker_array_msg);
         // RCLCPP_INFO(this->get_logger(), "Published %zu rotated bounding box markers.", rotated_bboxes.size());
+
+        // Send 2D BBoxes via MQTT
+        auto bboxes_2d = detector_->getObstacleBBoxes2DFromGround(obstacle_clusters);
+        if (!bboxes_2d.empty()) {
+            try {
+                nlohmann::json j = bboxes_2d;
+                std::string payload = j.dump();
+                mqtt_client_.publish("robot/obstacles/2d_bboxes", payload, 1, false);
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to send MQTT message: %s", e.what());
+            }
+        }
     }
 
+    mqtt::async_client mqtt_client_;
+    mqtt::connect_options mqtt_conn_opts_;
     std::unique_ptr<RangeImageObstacleDetector> detector_;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr publisher_;
