@@ -9,6 +9,8 @@
 #include <mqtt/async_client.h>
 
 // robosense airy frame_id: rslidar
+// bbox is not suitable for indoor, I tried to use nav2_msgs/msg/VoxelGrid, but rviz cannot show
+// so use pointcloud, set style as boxes, size = 0.1
 
 class ObstacleDetectorNode : public rclcpp::Node {
 public:
@@ -36,6 +38,7 @@ public:
         this->declare_parameter<float>("min_cluster_z_difference", 0.2f);
         this->declare_parameter<std::string>("input_topic", "/rslidar_points"); // /rslidar_points | /unitree/slam_lidar/points
         this->declare_parameter<std::string>("output_topic", "/obstacle_bbox");
+        this->declare_parameter<std::string>("voxel_grid_topic", "/obstacle_voxel_grid");
 
         // Get parameters
         int num_rings = this->get_parameter("num_rings").as_int();
@@ -44,6 +47,7 @@ public:
         float min_cluster_z_difference = this->get_parameter("min_cluster_z_difference").get_value<float>();
         std::string input_topic = this->get_parameter("input_topic").as_string();
         std::string output_topic = this->get_parameter("output_topic").as_string();
+        std::string voxel_grid_topic = this->get_parameter("voxel_grid_topic").as_string();
 
         detector_ = std::make_unique<RangeImageObstacleDetector>(
             num_rings, num_sectors, max_distance, min_cluster_z_difference, VisResultType::BBOX_GROUND);
@@ -52,6 +56,7 @@ public:
             input_topic, 10, std::bind(&ObstacleDetectorNode::pointCloudCallback, this, std::placeholders::_1));
         
         publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(output_topic, 10);
+        voxel_grid_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(voxel_grid_topic, 10);
 
         RCLCPP_INFO(this->get_logger(), "ObstacleDetectorNode initialized.");
         RCLCPP_INFO(this->get_logger(), "Subscribing to topic: %s", input_topic.c_str());
@@ -119,17 +124,51 @@ private:
         publisher_->publish(marker_array_msg);
         // RCLCPP_INFO(this->get_logger(), "Published %zu rotated bounding box markers.", rotated_bboxes.size());
 
-        // Send 2D BBoxes via MQTT
-        auto bboxes_2d = detector_->getObstacleBBoxes2DFromGround(obstacle_clusters);
-        if (!bboxes_2d.empty()) {
-            try {
-                nlohmann::json j = bboxes_2d;
-                std::string payload = j.dump();
-                mqtt_client_.publish("robot/obstacles/2d_bboxes", payload, 1, false);
-            } catch (const std::exception& e) {
-                RCLCPP_ERROR(this->get_logger(), "Failed to send MQTT message: %s", e.what());
+        // Publish VoxelGrid as PointCloud2 for RViz2 visualization
+        if (!obstacle_clusters.empty()) {
+            float resolution = 0.1f;
+            pcl::PointCloud<pcl::PointXYZI>::Ptr voxel_pc(new pcl::PointCloud<pcl::PointXYZI>);
+            
+            // Use a set to keep track of occupied voxels and avoid duplicates
+            std::set<std::tuple<int, int, int>> occupied_voxels;
+
+            for (const auto& cluster : obstacle_clusters) {
+                for (const auto& pt : cluster->points) {
+                    int ix = std::floor(pt.x / resolution);
+                    int iy = std::floor(pt.y / resolution);
+                    int iz = std::floor(pt.z / resolution);
+
+                    if (occupied_voxels.find({ix, iy, iz}) == occupied_voxels.end()) {
+                        occupied_voxels.insert({ix, iy, iz});
+                        pcl::PointXYZI voxel_pt;
+                        voxel_pt.x = ix * resolution + resolution / 2.0f;
+                        voxel_pt.y = iy * resolution + resolution / 2.0f;
+                        voxel_pt.z = iz * resolution + resolution / 2.0f;
+                        voxel_pt.intensity = pt.intensity;
+                        voxel_pc->points.push_back(voxel_pt);
+                    }
+                }
+            }
+
+            if (!voxel_pc->empty()) {
+                auto voxel_pc_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
+                pcl::toROSMsg(*voxel_pc, *voxel_pc_msg);
+                voxel_pc_msg->header = msg->header;
+                voxel_grid_pub_->publish(std::move(voxel_pc_msg));
             }
         }
+
+        // Send 2D BBoxes via MQTT
+        // auto bboxes_2d = detector_->getObstacleBBoxes2DFromGround(obstacle_clusters);
+        // if (!bboxes_2d.empty()) {
+        //     try {
+        //         nlohmann::json j = bboxes_2d;
+        //         std::string payload = j.dump();
+        //         mqtt_client_.publish("robot/obstacles/2d_bboxes", payload, 1, false);
+        //     } catch (const std::exception& e) {
+        //         RCLCPP_ERROR(this->get_logger(), "Failed to send MQTT message: %s", e.what());
+        //     }
+        // }
     }
 
     mqtt::async_client mqtt_client_;
@@ -137,6 +176,7 @@ private:
     std::unique_ptr<RangeImageObstacleDetector> detector_;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr publisher_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr voxel_grid_pub_;
 };
 
 
