@@ -136,7 +136,7 @@ private:
                     nlohmann::json j;
                     j["lidar_data"] = mqtt_lidar_data;
                     std::string payload = j.dump();
-                    mqtt_client_.publish("robot/obstacles/lidar_data", payload, 1, false);
+                    mqtt_client_.publish("lidar/data", payload, 1, false);
                 } catch (const std::exception& e) {
                     RCLCPP_ERROR(this->get_logger(), "Failed to send MQTT message: %s", e.what());
                 }
