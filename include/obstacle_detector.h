@@ -81,11 +81,34 @@ inline void to_json(nlohmann::json& j, const ObstacleBBox2D& bbox) {
     }}};
 }
 
+struct MqttLidarData {
+    float length;
+    float width;
+    float height;
+    struct CenterCoords {
+        float x;
+        float y;
+    } center_coordinates;
+    float distance;
+    std::string angle;
+};
+
+inline void to_json(nlohmann::json& j, const MqttLidarData& data) {
+    j = nlohmann::json{
+        {"length", data.length},
+        {"width", data.width},
+        {"height", data.height},
+        {"center_coordinates", {{"x", data.center_coordinates.x}, {"y", data.center_coordinates.y}}},
+        {"distance", data.distance},
+        {"angle", data.angle}
+    };
+}
+
 struct Cell {
     std::vector<int> point_indices;
 };
 
-enum class VisResultType { BBOX_LIDAR_XY, BBOX_GROUND, BBOX_GROUND_2D};
+enum class VisResultType { BBOX_LIDAR_XY, BBOX_GROUND, BBOX_GROUND_2D, BBOX_2D_AND_VOXEL};
 
 class WildTerrainSegmenter {
 public:
@@ -175,8 +198,8 @@ public:
 
     std::vector<RotatedBoundingBox> getObstacleBBoxesPCA(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
     std::vector<RotatedBoundingBox> getObstacleBBoxes(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
-    std::vector<ObstacleBBox2D> getObstacleBBoxes2DFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
     std::vector<RotatedBoundingBox> getObstacleBBoxesFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
+    std::vector<MqttLidarData> getMqttLidarData(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters);
 
     void saveRotatedBoundingBoxesToObj(
         const std::vector<RotatedBoundingBox>& rotated_bboxes,

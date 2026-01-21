@@ -14,6 +14,7 @@
 #include <queue> // Required for std::queue
 #include <cmath> // For std::abs
 #include <chrono>
+#include <iomanip>
 
 static constexpr bool LOCAL_DEBUG = false;
 
@@ -429,7 +430,6 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
         bboxes_lidar_frame_ = getObstacleBBoxesFromGround(clusters);
     }
     else if (vis_type_ == VisResultType::BBOX_GROUND_2D) {
-        bboxes_2d_ground_ = getObstacleBBoxes2DFromGround(clusters);
     }
 
     // transform clusters back to original sensor frame
@@ -643,6 +643,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByR
 
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByRangeEgo(pcl::PointCloud<RSPointDefault>::Ptr cloud) {
     // Filter by distance, convert to PointXYZINormal, transform xy plane to ground
+    // add remove z>2.0, since now coords are already in ground frame, 2026/01/21
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr filtered_normal(
         new pcl::PointCloud<pcl::PointXYZINormal>);
     filtered_normal->points.reserve(cloud->points.size()); // Reserve space
@@ -654,7 +655,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByR
         }
         float distance = p.norm();
         
-        if (distance <= max_range && distance > 0.5f) {  // Min distance 0.5m
+        if (distance <= max_range && distance > 0.5f && p.z()<2.0) {  // Min distance 0.5m
             pcl::PointXYZINormal pt_normal;
             pt_normal.x = p.x();
             pt_normal.y = p.y();
@@ -981,39 +982,6 @@ bool RangeImageObstacleDetector::computeClusterGeom(const pcl::PointCloud<pcl::P
     return true;
 }
 
-std::vector<ObstacleBBox2D> RangeImageObstacleDetector::getObstacleBBoxes2DFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
-    // input clusters are in ground frame, output is in ground frame
-    std::vector<ObstacleBBox2D> bboxes_2d;
-    for (const auto& current_cluster : clusters) {
-        MinAreaRect mar;
-        float min_z_cluster;
-        float max_z_cluster;
-
-        if (!computeClusterGeom(current_cluster, mar, min_z_cluster, max_z_cluster)) continue;
-
-        ObstacleBBox2D bbox;
-        float cos_a = std::cos(mar.angle);
-        float sin_a = std::sin(mar.angle);
-
-        // Local corners relative to center
-        float dx = mar.size_x / 2.0f;
-        float dy = mar.size_y / 2.0f;
-
-        Eigen::Vector2f local_corners[4] = {
-            {-dx, -dy},
-            {dx, -dy},
-            {dx, dy},
-            {-dx, dy}};
-
-        for (int i = 0; i < 4; ++i) {
-            bbox.corners[i].x() = mar.center.x() + local_corners[i].x() * cos_a - local_corners[i].y() * sin_a;
-            bbox.corners[i].y() = mar.center.y() + local_corners[i].x() * sin_a + local_corners[i].y() * cos_a;
-        }
-        bboxes_2d.push_back(bbox);
-    }
-    return bboxes_2d;
-}
-
 std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBBoxesFromGround(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
     // input clusters are in ground frame, output is in lidar frame
     
@@ -1046,6 +1014,51 @@ std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBBoxesFro
         }
     }
     return rotated_bboxes;
+}
+
+std::vector<MqttLidarData> RangeImageObstacleDetector::getMqttLidarData(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
+    std::vector<MqttLidarData> mqtt_data_vec;
+    for (const auto& cluster : clusters) {
+        if (cluster->points.empty()) continue;
+
+        float min_x = std::numeric_limits<float>::max();
+        float max_x = -std::numeric_limits<float>::max();
+        float min_y = std::numeric_limits<float>::max();
+        float max_y = -std::numeric_limits<float>::max();
+        float min_z = std::numeric_limits<float>::max();
+        float max_z = -std::numeric_limits<float>::max();
+        float min_dist = std::numeric_limits<float>::max();
+
+        for (const auto& pt : cluster->points) {
+            min_x = std::min(min_x, pt.x);
+            max_x = std::max(max_x, pt.x);
+            min_y = std::min(min_y, pt.y);
+            max_y = std::max(max_y, pt.y);
+            min_z = std::min(min_z, pt.z);
+            max_z = std::max(max_z, pt.z);
+            
+            float d = std::sqrt(pt.x * pt.x + pt.y * pt.y + pt.z * pt.z);
+            if (d < min_dist) min_dist = d;
+        }
+
+        MqttLidarData data;
+        data.width = max_x - min_x;
+        data.length = max_y - min_y;
+        data.height = max_z - min_z;
+        data.center_coordinates.x = (min_x + max_x) / 2.0f;
+        data.center_coordinates.y = (min_y + max_y) / 2.0f;
+        data.distance = min_dist;
+        
+        float angle_rad = std::atan2(data.center_coordinates.y, data.center_coordinates.x);
+        float angle_deg = angle_rad * 180.0f / M_PI;
+        
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(1) << angle_deg << "°";
+        data.angle = ss.str();
+
+        mqtt_data_vec.push_back(data);
+    }
+    return mqtt_data_vec;
 }
 
 std::vector<RotatedBoundingBox> RangeImageObstacleDetector::getObstacleBBoxes(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& clusters) {
