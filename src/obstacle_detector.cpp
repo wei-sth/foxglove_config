@@ -180,9 +180,9 @@ void WildTerrainSegmenter::segment(const cv::Mat& range_image, const cv::Mat& x_
                 }
             }
 
-            if (contain_obstacle && linearity < 0.01f) {
-                std::cout << "Cell [" << r << ", " << s << "] contains obstacle, linearity=" << linearity << std::endl;
-            }
+            // if (contain_obstacle && linearity < 0.01f) {
+            //     std::cout << "Cell [" << r << ", " << s << "] contains obstacle, linearity=" << linearity << std::endl;
+            // }
         }
     }
 
