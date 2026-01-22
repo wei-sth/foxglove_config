@@ -429,7 +429,8 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
     if (vis_type_ == VisResultType::BBOX_GROUND) {
         bboxes_lidar_frame_ = getObstacleBBoxesFromGround(clusters);
     }
-    else if (vis_type_ == VisResultType::BBOX_GROUND_2D) {
+    else if (vis_type_ == VisResultType::BBOX_GROUND_2D || vis_type_ == VisResultType::BBOX_2D_AND_VOXEL) {
+        return clusters;
     }
 
     // transform clusters back to original sensor frame
@@ -1051,10 +1052,7 @@ std::vector<MqttLidarData> RangeImageObstacleDetector::getMqttLidarData(const st
         
         float angle_rad = std::atan2(data.center_coordinates.y, data.center_coordinates.x);
         float angle_deg = angle_rad * 180.0f / M_PI;
-        
-        std::stringstream ss;
-        ss << std::fixed << std::setprecision(1) << angle_deg << "°";
-        data.angle = ss.str();
+        data.angle = angle_deg;
 
         mqtt_data_vec.push_back(data);
     }

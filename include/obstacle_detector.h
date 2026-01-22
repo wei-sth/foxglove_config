@@ -90,7 +90,7 @@ struct MqttLidarData {
         float y;
     } center_coordinates;
     float distance;
-    std::string angle;
+    float angle;
 };
 
 inline void to_json(nlohmann::json& j, const MqttLidarData& data) {
