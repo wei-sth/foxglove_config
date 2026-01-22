@@ -11,16 +11,19 @@
 // robosense airy frame_id: rslidar
 // bbox is not suitable for indoor, I tried to use nav2_msgs/msg/VoxelGrid, but rviz cannot show
 // so use pointcloud, set style as boxes, size = 0.1
+// MQTT broker kicks the older client if a new one connects with the same ID. 
+// Using a unique ID for each device to avoid connection loops. I use "obstacle_client_pc" (need to use yaml in the future)
 
-class ObstacleDetectorNode : public rclcpp::Node {
+class ObstacleDetectorNode : public rclcpp::Node, public virtual mqtt::callback {
 public:
     ObstacleDetectorNode() 
     : Node("obstacle_detector_node"),
-      mqtt_client_("tcp://124.221.132.177:1883", "obstacle_detector_node_client") {
-        // Configure MQTT
+      mqtt_client_("tcp://124.221.132.177:1883", "obstacle_client_pc") {
+        mqtt_client_.set_callback(*this);
         mqtt_conn_opts_.set_user_name("zbtest");
         mqtt_conn_opts_.set_password("zbtest");
-        mqtt_conn_opts_.set_keep_alive_interval(20);
+        mqtt_conn_opts_.set_keep_alive_interval(5);
+        mqtt_conn_opts_.set_connect_timeout(5);
         mqtt_conn_opts_.set_clean_session(true);
         mqtt_conn_opts_.set_automatic_reconnect(true);
 
@@ -63,6 +66,16 @@ public:
         RCLCPP_INFO(this->get_logger(), "Subscribing to topic: %s", input_topic.c_str());
         RCLCPP_INFO(this->get_logger(), "Publishing to topic: %s", output_topic.c_str());
     }
+
+    void connection_lost(const std::string& cause) override {
+        RCLCPP_ERROR(this->get_logger(), "MQTT connection lost: %s", cause.c_str());
+    }
+    void connected(const std::string& cause) override {
+        RCLCPP_INFO(this->get_logger(), "MQTT connected: %s", cause.c_str());
+    }
+    // not used but required by interface
+    void message_arrived(mqtt::const_message_ptr /*msg*/) override {}
+    void delivery_complete(mqtt::delivery_token_ptr /*tok*/) override {}
 
 private:
     void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -136,7 +149,7 @@ private:
                     nlohmann::json j;
                     j["lidar_data"] = mqtt_lidar_data;
                     std::string payload = j.dump();
-                    mqtt_client_.publish("lidar/data", payload, 1, false);
+                    mqtt_client_.publish("lidar/data", payload, 0, false);  // qos=0: do not wait for confirm, 1: at least once
                 } catch (const std::exception& e) {
                     RCLCPP_ERROR(this->get_logger(), "Failed to send MQTT message: %s", e.what());
                 }
