@@ -1050,7 +1050,8 @@ std::vector<MqttLidarData> RangeImageObstacleDetector::getMqttLidarData(const st
         data.center_coordinates.y = (min_y + max_y) / 2.0f;
         data.distance = min_dist;
         
-        float angle_rad = std::atan2(data.center_coordinates.y, data.center_coordinates.x);
+        // required by ddd, angle calculated based on y, left is negative, right is positive
+        float angle_rad = std::atan2(data.center_coordinates.x, data.center_coordinates.y);
         float angle_deg = angle_rad * 180.0f / M_PI;
         data.angle = angle_deg;
 

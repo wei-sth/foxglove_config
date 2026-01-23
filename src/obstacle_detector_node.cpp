@@ -18,7 +18,7 @@ class ObstacleDetectorNode : public rclcpp::Node, public virtual mqtt::callback 
 public:
     ObstacleDetectorNode() 
     : Node("obstacle_detector_node"),
-      mqtt_client_("tcp://124.221.132.177:1883", "obstacle_client_pc") {
+      mqtt_client_("tcp://124.221.132.177:1883", "obstacle_client_jetson") {
         mqtt_client_.set_callback(*this);
         mqtt_conn_opts_.set_user_name("zbtest");
         mqtt_conn_opts_.set_password("zbtest");
@@ -56,8 +56,7 @@ public:
 
         detector_ = std::make_unique<RangeImageObstacleDetector>(num_rings, num_sectors, max_distance, min_cluster_z_difference, vis_type_);
 
-        subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            input_topic, 10, std::bind(&ObstacleDetectorNode::pointCloudCallback, this, std::placeholders::_1));
+        subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(input_topic, rclcpp::QoS(10).best_effort(), std::bind(&ObstacleDetectorNode::pointCloudCallback, this, std::placeholders::_1));
         
         publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(output_topic, 10);
         voxel_grid_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(voxel_grid_topic, 10);
@@ -79,7 +78,8 @@ public:
 
 private:
     void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-        // RCLCPP_INFO(this->get_logger(), "Received PointCloud2 message.");
+        timestamp = rclcpp::Time(msg->header.stamp).seconds();
+        RCLCPP_INFO(this->get_logger(), "Received frame %.9f", timestamp);
 
         pcl::PointCloud<RSPointDefault>::Ptr cloud_raw(new pcl::PointCloud<RSPointDefault>);
         pcl::fromROSMsg(*msg, *cloud_raw);
@@ -149,7 +149,9 @@ private:
                     nlohmann::json j;
                     j["lidar_data"] = mqtt_lidar_data;
                     std::string payload = j.dump();
+                    RCLCPP_INFO(this->get_logger(), "Attempting MQTT Publish...");
                     mqtt_client_.publish("lidar/data", payload, 0, false);  // qos=0: do not wait for confirm, 1: at least once
+                    RCLCPP_INFO(this->get_logger(), "MQTT Publish returned.");
                 } catch (const std::exception& e) {
                     RCLCPP_ERROR(this->get_logger(), "Failed to send MQTT message: %s", e.what());
                 }
@@ -189,6 +191,8 @@ private:
                 voxel_grid_pub_->publish(std::move(voxel_pc_msg));
             }
         }
+
+        RCLCPP_INFO(this->get_logger(), "End process frame %.9f", timestamp);
     }
 
     mqtt::async_client mqtt_client_;
@@ -198,6 +202,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr voxel_grid_pub_;
+    double timestamp;  // for debug
 };
 
 
