@@ -13,13 +13,13 @@
 // so use pointcloud, set style as boxes, size = 0.1
 // MQTT broker kicks the older client if a new one connects with the same ID. 
 // Using a unique ID for each device to avoid connection loops. I use "obstacle_client_pc" (need to use yaml in the future)
-// mqtt ip to be used: 127.0.0.1
+// mqtt ip to be used: 127.0.0.1 | 124.221.132.177
 
 class ObstacleDetectorNode : public rclcpp::Node, public virtual mqtt::callback {
 public:
     ObstacleDetectorNode() 
     : Node("obstacle_detector_node"),
-      mqtt_client_("tcp://124.221.132.177:1883", "obstacle_client_jetson") {
+      mqtt_client_("tcp://127.0.0.1:1883", "obstacle_client_jetson") {
         mqtt_client_.set_callback(*this);
         mqtt_conn_opts_.set_user_name("zbtest");
         mqtt_conn_opts_.set_password("zbtest");
