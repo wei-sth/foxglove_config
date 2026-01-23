@@ -13,6 +13,7 @@
 // so use pointcloud, set style as boxes, size = 0.1
 // MQTT broker kicks the older client if a new one connects with the same ID. 
 // Using a unique ID for each device to avoid connection loops. I use "obstacle_client_pc" (need to use yaml in the future)
+// mqtt ip to be used: 127.0.0.1
 
 class ObstacleDetectorNode : public rclcpp::Node, public virtual mqtt::callback {
 public:
@@ -55,8 +56,8 @@ public:
         std::string voxel_grid_topic = this->get_parameter("voxel_grid_topic").as_string();
 
         detector_ = std::make_unique<RangeImageObstacleDetector>(num_rings, num_sectors, max_distance, min_cluster_z_difference, vis_type_);
-
-        subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(input_topic, rclcpp::QoS(10).best_effort(), std::bind(&ObstacleDetectorNode::pointCloudCallback, this, std::placeholders::_1));
+        // only use THE ONLY ONE latest lidar message 
+        subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(input_topic, rclcpp::QoS(1).best_effort(), std::bind(&ObstacleDetectorNode::pointCloudCallback, this, std::placeholders::_1));
         
         publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(output_topic, 10);
         voxel_grid_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(voxel_grid_topic, 10);
