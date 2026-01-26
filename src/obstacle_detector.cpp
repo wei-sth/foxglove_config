@@ -656,6 +656,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RangeImageObstacleDetector::filterByR
         }
         float distance = p.norm();
         
+        // NaNs are implicitly filtered out because any comparison (>, <, ==) with NaN returns false.
         if (distance <= max_range && distance > 0.5f && p.z()<2.0) {  // Min distance 0.5m
             pcl::PointXYZINormal pt_normal;
             pt_normal.x = p.x();

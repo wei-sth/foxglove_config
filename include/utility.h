@@ -90,9 +90,6 @@ enum class SensorType { VELODYNE, HESAI, LIVOX, ROBOSENSE, MULRAN};
 class ParamServer : public rclcpp::Node
 {
 public:
-    string history_policy;
-    string reliability_policy;
-
     std::string robot_id;
 
     //Topics
@@ -192,10 +189,6 @@ public:
     ParamServer(std::string node_name, const rclcpp::NodeOptions & options) : Node(node_name, options)
     {   
         this->get_logger().set_level(rclcpp::Logger::Level::Debug); // Set logger level to DEBUG
-        declare_parameter<string>("history_policy", "history_keep_last");
-        get_parameter("history_policy", history_policy);
-        declare_parameter<string>("reliability_policy", "reliability_reliable");
-        get_parameter("reliability_policy", reliability_policy);
 
         declare_parameter<string>("pointCloudTopic", "/points_raw");
         get_parameter("pointCloudTopic", pointCloudTopic);

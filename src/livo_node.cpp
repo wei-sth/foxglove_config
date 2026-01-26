@@ -72,41 +72,71 @@ void LivoNode::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg) {
 // check imu_prop_callback function in fast-livo2, if speed = 20km/h, 100 ms means 0.55m, for obstacle detection, we need real time pose
 // we should based on the pose optimized by last lidar align, calculate relative movement from imu
 
-void LivoNode::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-    // 1. 在回调中直接转换格式 (并行化优化)
-    pcl::PointCloud<HesaiPointXYZIRT> tmp_hesai_cloud;
-    pcl::fromROSMsg(*msg, tmp_hesai_cloud);
+// void LivoNode::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+//     pcl::PointCloud<HesaiPointXYZIRT> tmp_hesai_cloud;
+//     pcl::fromROSMsg(*msg, tmp_hesai_cloud);
 
-    // xt16 point time is relative time(unit: ns), msg header timestamp is message sending time (almost the time of last point)
+//     // xt16 point time is relative time(unit: ns), msg header timestamp is message sending time (almost the time of last point)
+//     LidarData data;
+//     data.lidar_frame_end_time = rclcpp::Time(msg->header.stamp).seconds();
+//     data.lidar_frame_beg_time = data.lidar_frame_end_time - 0.1;  // 10Hz, each duration is 0.1s, so start time should be minus 0.1
+//     data.cloud.reset(new pcl::PointCloud<PointType>());
+//     data.cloud->reserve(tmp_hesai_cloud.size());
+    
+//     // remove ego cloud and outlier (noisy points extremely far, 100m)
+//     for (const auto& p : tmp_hesai_cloud.points) {
+//         if (p.x*p.x + p.y*p.y + p.z*p.z > 10000) continue;
+
+//         PointType dst;
+//         dst.x = p.x;
+//         dst.y = p.y;
+//         dst.z = p.z;
+//         dst.intensity = p.intensity;
+//         dst.normal_x = p.ring;   // ring -- normal_x
+//         dst.normal_y = p.time * 1e-9;   // relative time -- normal_y, ns -> s
+
+//         dst = lidarToImu(dst);
+
+//         data.cloud->push_back(dst);
+//     }
+
+//     std::lock_guard<std::mutex> lock(mtx_buffer);
+//     lidar_buffer.push_back(data);
+//     cv_data.notify_one(); // notify slam process
+// }
+
+void LivoNode::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+    pcl::PointCloud<RSPointDefault> tmp_rs_cloud;
+    pcl::fromROSMsg(*msg, tmp_rs_cloud);
+
+    // robosense point time is relative time(unit: ns), msg header timestamp is scan start time
     LidarData data;
-    data.lidar_frame_end_time = rclcpp::Time(msg->header.stamp).seconds();
-    data.lidar_frame_beg_time = data.lidar_frame_end_time - 0.1;  // 10Hz, each duration is 0.1s, so start time should be minus 0.1
+    data.lidar_frame_beg_time = rclcpp::Time(msg->header.stamp).seconds();
+    data.lidar_frame_end_time = data.lidar_frame_beg_time + 0.1;  // 10Hz
     data.cloud.reset(new pcl::PointCloud<PointType>());
-    data.cloud->reserve(tmp_hesai_cloud.size());
+    data.cloud->reserve(tmp_rs_cloud.size());
     
     // remove ego cloud and outlier (noisy points extremely far, 100m)
-    for (const auto& p : tmp_hesai_cloud.points) {
-        if (p.x*p.x + p.y*p.y + p.z*p.z > 10000) continue;
-
-        PointType dst;
-        dst.x = p.x;
-        dst.y = p.y;
-        dst.z = p.z;
-        dst.intensity = p.intensity;
-        dst.normal_x = p.ring;   // 将 ring 存入 normal_x
-        dst.normal_y = p.time * 1e-9;   // 将相对时间 time 存入 normal_y, ns -> s
-
-        dst = lidarToImu(dst);
-
-        data.cloud->push_back(dst);
+    for (const auto& p : tmp_rs_cloud.points) {
+        // NaNs are implicitly filtered out because any comparison (>, <, ==) with NaN returns false.
+        if (p.x*p.x + p.y*p.y + p.z*p.z < 10000) {
+            PointType dst;
+            dst.x = p.x;
+            dst.y = p.y;
+            dst.z = p.z;
+            dst.intensity = p.intensity;
+            dst.normal_x = p.ring;   // ring -- normal_x
+            dst.normal_y = p.timestamp * 1e-9;   // relative time -- normal_y, ns -> s
+            dst = lidarToImu(dst);
+            data.cloud->push_back(dst);
+        }
     }
 
     std::lock_guard<std::mutex> lock(mtx_buffer);
     lidar_buffer.push_back(data);
-    cv_data.notify_one(); // 唤醒算法线程
+    cv_data.notify_one(); // notify slam process
 }
 
-// --- 核心算法线程：最可控执行流 ---
 void LivoNode::slamProcessLoop() {
     while (rclcpp::ok()) {
         LidarData current_lidar_data;

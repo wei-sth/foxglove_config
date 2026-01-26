@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
     # Topics
-    pointCloudTopic: "/unitree/slam_lidar/points"    # Point cloud data
-    imuTopic: "/camera/imu"                         # IMU data, /camera/imu | /utlidar/imu
+    pointCloudTopic: "/rslidar_points"    # Point cloud data
+    imuTopic: "/rslidar_imu_data"                         # IMU data, /camera/imu | /utlidar/imu
     odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
 
     # Frames
@@ -38,11 +38,11 @@
     imuGravity: 9.80511
     imuRPYWeight: 0.01                          # default: 0.01, only used when imuType == 1
 
-    # camera imu and xt16, lidar wrt imu, used to convert lidar to imu frame, different from liosam
-    extrinsicTrans: [-0.07497628, -0.02291526, -0.20173281]
-    extrinsicRot: [-0.99916747, -0.02908486, 0.02859728,
-                   -0.03165123, 0.11062869, -0.99335754,
-                   0.02572838, -0.99343532, -0.11145679]
+    # lidar wrt imu, used to convert lidar to imu frame
+    extrinsicTrans: [0.0, 0.0, 0.0]
+    extrinsicRot: [1.0, 0.0, 0.0,
+                   0.0, 1.0, 0.0,
+                   0.0, 0.0, 1.0]
 
     # This parameter is set only when the 9-axis IMU is used, but it must be a high-precision IMU. e.g. MTI-680
     extrinsicRPY: [0.0, -1.0, 0.0,
