@@ -39,6 +39,7 @@ include_directories(
 add_executable(obstacle_detector src/obstacle_detector_standalone.cpp src/obstacle_detector.cpp)
 add_executable(obstacle_detector_node src/obstacle_detector_node.cpp src/obstacle_detector.cpp)
 add_executable(test_vgicp src/test_vgicp.cpp)
+add_executable(test_vio src/test_vio.cpp)
 add_executable(livo src/livo_node.cpp)
 
 ament_target_dependencies(obstacle_detector_node
@@ -65,7 +66,7 @@ target_link_libraries(obstacle_detector_node
 target_link_libraries(test_vgicp
   ${PCL_LIBRARIES}
 )
-
+target_link_libraries(test_vio ${OpenCV_LIBS})
 target_link_libraries(livo
   ${PCL_LIBRARIES}
   OpenMP::OpenMP_CXX
@@ -75,6 +76,7 @@ install(TARGETS
   obstacle_detector
   obstacle_detector_node
   test_vgicp
+  test_vio
   livo
   DESTINATION lib/${PROJECT_NAME}
 )
