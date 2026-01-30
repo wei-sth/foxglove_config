@@ -11,5 +11,7 @@
  * @return True if boundary detection is successful, false otherwise.
  */
 bool detectBoundary(const std::string& image_path, const std::string& output_path);
+bool detectBoundary_v0(const std::string& image_path, const std::string& output_path);
+bool detectBoundary_v1(const std::string& image_path, const std::string& output_path);
 
 #endif // BOUNDARY_DETECTOR_H
