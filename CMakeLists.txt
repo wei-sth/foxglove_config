@@ -37,6 +37,7 @@ include_directories(
 )
 
 add_executable(obstacle_detector src/obstacle_detector_standalone.cpp src/obstacle_detector.cpp)
+add_executable(boundary_detector src/boundary_detector_standalone.cpp src/boundary_detector.cpp)
 add_executable(obstacle_detector_node src/obstacle_detector_node.cpp src/obstacle_detector.cpp)
 add_executable(test_vgicp src/test_vgicp.cpp)
 add_executable(test_vio src/test_vio.cpp)
@@ -52,11 +53,8 @@ ament_target_dependencies(obstacle_detector_node
 )
 ament_target_dependencies(livo ${ros2_lib})
 
-target_link_libraries(obstacle_detector
-  ${PCL_LIBRARIES}
-  ${OpenCV_LIBS}
-  nlohmann_json::nlohmann_json
-)
+target_link_libraries(obstacle_detector ${PCL_LIBRARIES} ${OpenCV_LIBS} nlohmann_json::nlohmann_json)
+target_link_libraries(boundary_detector ${OpenCV_LIBS})
 target_link_libraries(obstacle_detector_node
   ${PCL_LIBRARIES}
   ${OpenCV_LIBS}
@@ -74,6 +72,7 @@ target_link_libraries(livo
 
 install(TARGETS
   obstacle_detector
+  boundary_detector
   obstacle_detector_node
   test_vgicp
   test_vio
