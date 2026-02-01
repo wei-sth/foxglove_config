@@ -27,41 +27,90 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
     cv::imwrite(parent_path + "/" + root + "_s" + ext, hsv_channels[1]);
     cv::imwrite(parent_path + "/" + root + "_v" + ext, hsv_channels[2]);
 
-    // Calculate gradients for texture analysis
-    cv::Mat gray_for_gradients;
-    cv::cvtColor(img, gray_for_gradients, cv::COLOR_BGR2GRAY);
+    cv::Mat lab;
+    cv::cvtColor(img, lab, cv::COLOR_BGR2Lab);  // saving lab directly to image is meaningless for most image viewer. Two pixels seem the same does not mean we cannot split them by true l,a,b value.
+    std::vector<cv::Mat> lab_channels;
+    cv::split(lab, lab_channels); // lab_channels[0] = L, lab_channels[1] = a, lab_channels[2] = b
+    cv::imwrite(parent_path + "/" + root + "_l" + ext, lab_channels[0]);
+    cv::imwrite(parent_path + "/" + root + "_a" + ext, lab_channels[1]);
+    cv::imwrite(parent_path + "/" + root + "_b" + ext, lab_channels[2]);
 
+    // Calculate gradients for texture analysis, FILTER_SCHARR is more sensitive
     cv::Mat grad_x, grad_y;
     cv::Mat abs_grad_x, abs_grad_y;
-
-    // Gradient X
-    cv::Sobel(gray_for_gradients, grad_x, CV_16S, 1, 0, 3, 1, 0, cv::BORDER_DEFAULT);
+    // cv::Sobel(gray, grad_x, CV_16S, 1, 0, 3, 1, 0, cv::BORDER_DEFAULT);
+    cv::Sobel(gray, grad_x, CV_16S, 1, 0, cv::FILTER_SCHARR);
     cv::convertScaleAbs(grad_x, abs_grad_x);
-
-    // Gradient Y
-    cv::Sobel(gray_for_gradients, grad_y, CV_16S, 0, 1, 3, 1, 0, cv::BORDER_DEFAULT);
+    // cv::Sobel(gray, grad_y, CV_16S, 0, 1, 3, 1, 0, cv::BORDER_DEFAULT);
+    cv::Sobel(gray, grad_y, CV_16S, 0, 1, cv::FILTER_SCHARR);
     cv::convertScaleAbs(grad_y, abs_grad_y);
-
-    // Convert gradients to floating-point type for cv::magnitude
-    cv::Mat grad_x_float, grad_y_float;
-    grad_x.convertTo(grad_x_float, CV_32F);
-    grad_y.convertTo(grad_y_float, CV_32F);
-
     // Total Gradient (approximate magnitude)
     cv::Mat grad_magnitude;
     cv::addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0, grad_magnitude);
-    cv::imwrite(parent_path + "/" + root + "_grad_magnitude" + ext, grad_magnitude); // Save gradient magnitude image
+    cv::imwrite(parent_path + "/" + root + "_grad_magnitude" + ext, grad_magnitude);
+    cv::Mat texture_energy;
+    // 卷积核大一些，比如 15x15 或 21x21, seems not good  均值模糊会保留线条，但中值滤波是线条的克星。
+    cv::blur(grad_magnitude, texture_energy, cv::Size(33, 33));
+    cv::imwrite(parent_path + "/" + root + "_grad_magnitude_blur" + ext, texture_energy);
+    cv::Mat median_grad;
+    cv::medianBlur(grad_magnitude, median_grad, 11); // 使用较大的核，如 9 或 11
+    cv::imwrite(parent_path + "/" + root + "_grad_magnitude_blur_m" + ext, median_grad);
+    // 水泥地的六边形直线纹理太干净、太直了。在频域上，这种直线属于低频成分，普通的模糊很难滤除。
 
-    // Total Gradient (more accurate magnitude using sqrt)
-    cv::Mat grad_magnitude_float;
-    cv::magnitude(grad_x_float, grad_y_float, grad_magnitude_float);
+    // mask_grass should contain most part of grass, snow and soil might be excluded(which should be included), edges on concrete might be included (which should be excluded) 
+    cv::Mat mask_grass;
+    cv::Scalar lower_grass(0, 87, 0);
+    cv::Scalar upper_grass(49, 255, 93);
+    cv::inRange(hsv, lower_grass, upper_grass, mask_grass);
+    cv::imwrite(parent_path + "/" + root + "_mask_grass" + ext, mask_grass); // white is grass
 
-    // Convert to 8-bit for saving/display
-    cv::Mat grad_magnitude_8u;
-    // Scale the float values to 0-255 range for 8-bit image
-    cv::normalize(grad_magnitude_float, grad_magnitude_8u, 0, 255, cv::NORM_MINMAX, CV_8U);
-    // grad_magnitude_float.convertTo(grad_magnitude_8u, CV_8U);
-    cv::imwrite(parent_path + "/" + root + "_grad_magnitude_sqrt" + ext, grad_magnitude_8u); // Save gradient magnitude image
+    // -------------
+    // --- 3. 补洞处理 (闭运算 MORPH_CLOSE) ---
+    // 目的：把草地里的雪洞、枯草空隙连成一片
+    // 核的大小取决于雪洞的大小，建议用较大的核 (例如 25x25)
+    cv::Mat close_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(25, 25));
+    cv::Mat mask_closed;
+    cv::morphologyEx(mask_grass, mask_closed, cv::MORPH_CLOSE, close_kernel);
+
+    // --- 4. 去线处理 (开运算 MORPH_OPEN = 先腐蚀后膨胀) ---
+    // 目的：抹去细长的水泥缝隙
+    // 关键点：核的大小必须【大于】水泥缝隙的宽度。
+    // 如果缝隙在图中是 5-10 像素宽，我们用 15x15 的核，缝隙就会因为“腐蚀”而彻底消失
+    cv::Mat open_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(15, 15));
+    cv::Mat mask_opened;
+    cv::morphologyEx(mask_closed, mask_opened, cv::MORPH_OPEN, open_kernel);
+
+    // --- 5. 面积过滤 (保留最大连通域) ---
+    // 目的：万一还有残余的杂质，只保留面积最大的那块“草地”
+    std::vector<std::vector<cv::Point>> contours_grass;
+    cv::findContours(mask_opened, contours_grass, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    cv::Mat grass_final = cv::Mat::zeros(img.size(), CV_8UC1);
+    if (!contours_grass.empty()) {
+        // 找到面积最大的轮廓
+        auto it = std::max_element(contours_grass.begin(), contours_grass.end(),
+            [](const std::vector<cv::Point>& a, const std::vector<cv::Point>& b) {
+                return cv::contourArea(a) < cv::contourArea(b);
+            });
+        
+        // 填充该轮廓，彻底抹平内部残留的小孔
+        cv::drawContours(grass_final, std::vector<std::vector<cv::Point>>{*it}, -1, 255, -1);
+    }
+
+    // --- 6. 提取边界线 ---
+    // 对填充后的实心草地区域取梯度
+    cv::Mat boundary;
+    cv::Canny(grass_final, boundary, 100, 200);
+
+    cv::Mat save_img = img.clone();
+
+    // 3. 将边界画在图上
+    // 这里使用红色 (B=0, G=0, R=255) 来标记边界
+    // setTo 的作用是：在 boundary 为白色的地方，把 save_img 对应位置设为红色
+    save_img.setTo(cv::Scalar(0, 0, 255), boundary);
+    cv::imwrite(output_path, save_img);
+    // --------------
+    
     
     // -------------------------------------------------------------------------------
     // Apply Gabor filters for texture analysis, does not find anything, not very time costly
@@ -144,23 +193,10 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
     cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0);
     cv::imwrite(parent_path + "/" + root + "_blurred" + ext, blurred); // Save blurred image
 
-    // Adjust HSV ranges for grass (green/brown) and concrete (gray)
-    // These values may need fine-tuning based on the actual image
-    // Assuming grass is brownish-green, concrete is gray
-    // Brown/Green range (H: 20-80, S: 30-255, V: 30-255)
-    // Gray range (H: 0-180, S: 0-30, V: 50-200)
-
-    // Attempt to segment grass
-    cv::Mat mask_grass;
-    cv::Scalar lower_grass(20, 30, 30);
-    cv::Scalar upper_grass(80, 255, 255);
-    cv::inRange(hsv, lower_grass, upper_grass, mask_grass);
-    cv::imwrite(parent_path + "/" + root + "_mask_grass" + ext, mask_grass); // Save grass mask, white is grass
-
     // Attempt to segment concrete
     cv::Mat mask_concrete;
-    cv::Scalar lower_concrete(0, 0, 50);
-    cv::Scalar upper_concrete(180, 30, 200);
+    cv::Scalar lower_concrete(0, 0, 136);
+    cv::Scalar upper_concrete(25, 71, 224);
     cv::inRange(hsv, lower_concrete, upper_concrete, mask_concrete);
     cv::imwrite(parent_path + "/" + root + "_mask_concrete" + ext, mask_concrete); // Save concrete mask, white is concrete
 
@@ -178,27 +214,18 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
     cv::imwrite(parent_path + "/" + root + "_combined_mask" + ext, combined_mask); // Save combined mask
     
     // 4. Edge detection
-    // Use Canny on the blurred grayscale image
     cv::Mat edges;
-    cv::Canny(blurred, edges, 50, 150);
+    // cv::Canny(blurred, edges, 50, 150); // use Canny on the blurred grayscale image
+    cv::Canny(combined_mask, edges, 50, 150); // use Canny on the combined_mask
     cv::imwrite(parent_path + "/" + root + "_edges" + ext, edges); // Save edges image
 
-    // Alternatively, use Canny on the combined_mask
-    // cv::Canny(combined_mask, edges, 50, 150);
-
-    // 5. Contour finding and drawing
+    // get contours
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(edges, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    // Draw contours on the original image
     cv::Mat output_img = img.clone();
     cv::drawContours(output_img, contours, -1, cv::Scalar(0, 255, 0), 2); // Green contours
-
-    // 6. Save the result
-    if (!cv::imwrite(output_path, output_img)) {
-        std::cerr << "Error: Could not save output image to " << output_path << std::endl;
-        return false;
-    }
+    // cv::imwrite(output_path, output_img);
     std::cout << "Boundary detection complete. Output saved to " << output_path << std::endl;
     return true;
 }
@@ -389,3 +416,66 @@ bool detectBoundary_v1(const std::string& image_path, const std::string& output_
     std::cout << "Boundary detection complete. Output saved to " << output_path << std::endl;
     return true;
 }
+
+void on_trackbar(int, void* userdata) {
+    HSVContext* ctx = static_cast<HSVContext*>(userdata);
+    cv::Scalar lower_bound(ctx->h_min, ctx->s_min, ctx->v_min);
+    cv::Scalar upper_bound(ctx->h_max, ctx->s_max, ctx->v_max);
+
+    cv::Mat mask;
+    cv::inRange(ctx->hsv_img, lower_bound, upper_bound, mask);
+    cv::Mat result;
+    cv::bitwise_and(ctx->hsv_img, ctx->hsv_img, result, mask);
+    cv::imshow("Segmented Result", mask);
+    cv::imshow("Color Extracted", result);
+}
+
+void tuneHSVThreshold(const std::string& image_path, double scale) {
+    cv::Mat img = cv::imread(image_path);
+
+    cv::Mat processed_img;
+    double final_scale = scale;
+
+    if (scale <= 0.0) {
+        // auto scale
+        double max_w = 1280.0;
+        double max_h = 720.0;
+        if (img.cols > max_w || img.rows > max_h) {
+            final_scale = std::min(max_w / img.cols, max_h / img.rows);
+        } else {
+            final_scale = 1.0;
+        }
+    }
+
+    if (std::abs(final_scale - 1.0) > 0.001) {
+        cv::resize(img, processed_img, cv::Size(), final_scale, final_scale, cv::INTER_AREA);
+        std::cout << "Image resized by factor: " << final_scale << std::endl;
+    } else {
+        processed_img = img;
+    }
+
+    HSVContext ctx;
+    cv::cvtColor(processed_img, ctx.hsv_img, cv::COLOR_BGR2HSV);
+    cv::namedWindow("Segmented Result", cv::WINDOW_NORMAL);
+    cv::namedWindow("Trackbars", cv::WINDOW_NORMAL);
+    cv::createTrackbar("H_Min", "Trackbars", &ctx.h_min, 179, on_trackbar, &ctx);
+    cv::createTrackbar("H_Max", "Trackbars", &ctx.h_max, 179, on_trackbar, &ctx);
+    cv::createTrackbar("S_Min", "Trackbars", &ctx.s_min, 255, on_trackbar, &ctx);
+    cv::createTrackbar("S_Max", "Trackbars", &ctx.s_max, 255, on_trackbar, &ctx);
+    cv::createTrackbar("V_Min", "Trackbars", &ctx.v_min, 255, on_trackbar, &ctx);
+    cv::createTrackbar("V_Max", "Trackbars", &ctx.v_max, 255, on_trackbar, &ctx);
+
+    // initialize
+    on_trackbar(0, &ctx);
+
+    std::cout << "press any key to exit..." << std::endl;
+    cv::waitKey(0);
+    cv::destroyWindow("Segmented Result");
+    cv::destroyWindow("Trackbars");
+    std::printf("Final Thresholds: \nLower: [%d, %d, %d]\nUpper: [%d, %d, %d]\n", 
+                ctx.h_min, ctx.s_min, ctx.v_min, ctx.h_max, ctx.s_max, ctx.v_max);
+}
+
+// Final Thresholds:
+// Lower: [0, 87, 0]
+// Upper: [49, 255, 93]
