@@ -2,6 +2,10 @@
 #include <iostream>
 #include <filesystem> // For path manipulation
 
+// try to use use Canny on mask, or use canny on gray, gray_blurred, h_channel etc.
+// use cv::bitwise_or to combine mask
+// use cv::GaussianBlur
+
 bool detectBoundary(const std::string& image_path, const std::string& output_path) {
     // Extract root and extension from image_path
     std::filesystem::path img_path_obj(image_path);
@@ -27,34 +31,35 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
     cv::imwrite(parent_path + "/" + root + "_s" + ext, hsv_channels[1]);
     cv::imwrite(parent_path + "/" + root + "_v" + ext, hsv_channels[2]);
 
-    cv::Mat lab;
-    cv::cvtColor(img, lab, cv::COLOR_BGR2Lab);  // saving lab directly to image is meaningless for most image viewer. Two pixels seem the same does not mean we cannot split them by true l,a,b value.
-    std::vector<cv::Mat> lab_channels;
-    cv::split(lab, lab_channels); // lab_channels[0] = L, lab_channels[1] = a, lab_channels[2] = b
-    cv::imwrite(parent_path + "/" + root + "_l" + ext, lab_channels[0]);
-    cv::imwrite(parent_path + "/" + root + "_a" + ext, lab_channels[1]);
-    cv::imwrite(parent_path + "/" + root + "_b" + ext, lab_channels[2]);
+    // HSV space works well for this scene, whereas Lab space shows no clear patterns. Comment out in case other scenes might need Lab.
+    // cv::Mat lab;
+    // cv::cvtColor(img, lab, cv::COLOR_BGR2Lab);  // saving lab directly to image is meaningless for most image viewer. Two pixels seem the same does not mean we cannot split them by true l,a,b value.
+    // std::vector<cv::Mat> lab_channels;
+    // cv::split(lab, lab_channels); // lab_channels[0] = L, lab_channels[1] = a, lab_channels[2] = b
+    // cv::imwrite(parent_path + "/" + root + "_l" + ext, lab_channels[0]);
+    // cv::imwrite(parent_path + "/" + root + "_a" + ext, lab_channels[1]);
+    // cv::imwrite(parent_path + "/" + root + "_b" + ext, lab_channels[2]);
 
     // Calculate gradients for texture analysis, FILTER_SCHARR is more sensitive
-    cv::Mat grad_x, grad_y;
-    cv::Mat abs_grad_x, abs_grad_y;
-    // cv::Sobel(gray, grad_x, CV_16S, 1, 0, 3, 1, 0, cv::BORDER_DEFAULT);
-    cv::Sobel(gray, grad_x, CV_16S, 1, 0, cv::FILTER_SCHARR);
-    cv::convertScaleAbs(grad_x, abs_grad_x);
-    // cv::Sobel(gray, grad_y, CV_16S, 0, 1, 3, 1, 0, cv::BORDER_DEFAULT);
-    cv::Sobel(gray, grad_y, CV_16S, 0, 1, cv::FILTER_SCHARR);
-    cv::convertScaleAbs(grad_y, abs_grad_y);
-    // Total Gradient (approximate magnitude)
-    cv::Mat grad_magnitude;
-    cv::addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0, grad_magnitude);
-    cv::imwrite(parent_path + "/" + root + "_grad_magnitude" + ext, grad_magnitude);
-    cv::Mat texture_energy;
-    // 卷积核大一些，比如 15x15 或 21x21, seems not good  均值模糊会保留线条，但中值滤波是线条的克星。
-    cv::blur(grad_magnitude, texture_energy, cv::Size(33, 33));
-    cv::imwrite(parent_path + "/" + root + "_grad_magnitude_blur" + ext, texture_energy);
-    cv::Mat median_grad;
-    cv::medianBlur(grad_magnitude, median_grad, 11); // 使用较大的核，如 9 或 11
-    cv::imwrite(parent_path + "/" + root + "_grad_magnitude_blur_m" + ext, median_grad);
+    // cv::Mat grad_x, grad_y;
+    // cv::Mat abs_grad_x, abs_grad_y;
+    // // cv::Sobel(gray, grad_x, CV_16S, 1, 0, 3, 1, 0, cv::BORDER_DEFAULT);
+    // cv::Sobel(gray, grad_x, CV_16S, 1, 0, cv::FILTER_SCHARR);
+    // cv::convertScaleAbs(grad_x, abs_grad_x);
+    // // cv::Sobel(gray, grad_y, CV_16S, 0, 1, 3, 1, 0, cv::BORDER_DEFAULT);
+    // cv::Sobel(gray, grad_y, CV_16S, 0, 1, cv::FILTER_SCHARR);
+    // cv::convertScaleAbs(grad_y, abs_grad_y);
+    // // Total Gradient (approximate magnitude)
+    // cv::Mat grad_magnitude;
+    // cv::addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0, grad_magnitude);
+    // cv::imwrite(parent_path + "/" + root + "_grad_magnitude" + ext, grad_magnitude);
+    // cv::Mat texture_energy;
+    // // 卷积核大一些，比如 15x15 或 21x21, seems not good  均值模糊会保留线条，但中值滤波是线条的克星。
+    // cv::blur(grad_magnitude, texture_energy, cv::Size(33, 33));
+    // cv::imwrite(parent_path + "/" + root + "_grad_magnitude_blur" + ext, texture_energy);
+    // cv::Mat median_grad;
+    // cv::medianBlur(grad_magnitude, median_grad, 11); // 使用较大的核，如 9 或 11
+    // cv::imwrite(parent_path + "/" + root + "_grad_magnitude_blur_m" + ext, median_grad);
     // 水泥地的六边形直线纹理太干净、太直了。在频域上，这种直线属于低频成分，普通的模糊很难滤除。
 
     // mask_grass should contain most part of grass, snow and soil might be excluded(which should be included), edges on concrete might be included (which should be excluded) 
@@ -97,20 +102,30 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
         cv::drawContours(grass_final, std::vector<std::vector<cv::Point>>{*it}, -1, 255, -1);
     }
 
-    // --- 6. 提取边界线 ---
-    // 对填充后的实心草地区域取梯度
-    cv::Mat boundary;
-    cv::Canny(grass_final, boundary, 100, 200);
+    // Canny: Edge detection; outputs an unordered pixel mask (cv::Mat) for visualization.
+    // findContours: Contour extraction; outputs ordered point sequences (vector<Point>) for geometric analysis.
+    // cv::Mat boundary;
+    // cv::Canny(grass_final, boundary, 100, 200);  // used on mask (binary), threshold param not very important
+    // cv::Mat save_img = img.clone();
+    // save_img.setTo(cv::Scalar(0, 0, 255), boundary);
+    // cv::imwrite(output_path, save_image);
+    std::vector<std::vector<cv::Point>> final_contours;
+    cv::findContours(grass_final, final_contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    cv::Mat save_img = img.clone();
-
-    // 3. 将边界画在图上
-    // 这里使用红色 (B=0, G=0, R=255) 来标记边界
-    // setTo 的作用是：在 boundary 为白色的地方，把 save_img 对应位置设为红色
-    save_img.setTo(cv::Scalar(0, 0, 255), boundary);
+    // visualization option 1: only draw contour
+    // cv::Mat save_img = img.clone();
+    // cv::drawContours(save_img, final_contours, -1, cv::Scalar(0, 255, 0), 3);  // -1: draw all contours, Scalar(0, 255, 0): green (BGR), 3: line width
+    // visualization option 2: draw contour and overlay
+    cv::Mat overlay = img.clone();
+    cv::Scalar fillColor = cv::Scalar(0, 255, 0);
+    cv::drawContours(overlay, final_contours, -1, fillColor, cv::FILLED);
+    double alpha = 0.3;
+    cv::Mat save_img;
+    cv::addWeighted(overlay, alpha, img, 1.0 - alpha, 0, save_img);  // save_img = alpha * overlay + (1 - alpha) * img + 0
+    cv::drawContours(save_img, final_contours, -1, cv::Scalar(0, 255, 0), 3);
     cv::imwrite(output_path, save_img);
-    // --------------
-    
+    std::cout << "Boundary detection complete. Output saved to " << output_path << std::endl;
+    return true;
     
     // -------------------------------------------------------------------------------
     // Apply Gabor filters for texture analysis, does not find anything, not very time costly
@@ -188,46 +203,14 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
 
     // cv::normalize(L1_div_L2_map, L1_div_L2_8u, 0, 255, cv::NORM_MINMAX, CV_8U);
     // cv::imwrite(parent_path + "/" + root + "_L1_div_L2" + ext, L1_div_L2_8u);
-
-    cv::Mat blurred;
-    cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0);
-    cv::imwrite(parent_path + "/" + root + "_blurred" + ext, blurred); // Save blurred image
+    
 
     // Attempt to segment concrete
-    cv::Mat mask_concrete;
-    cv::Scalar lower_concrete(0, 0, 136);
-    cv::Scalar upper_concrete(25, 71, 224);
-    cv::inRange(hsv, lower_concrete, upper_concrete, mask_concrete);
-    cv::imwrite(parent_path + "/" + root + "_mask_concrete" + ext, mask_concrete); // Save concrete mask, white is concrete
-
-    // 3. Morphological operations (optional, if direct Canny is not effective)
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
-    cv::morphologyEx(mask_grass, mask_grass, cv::MORPH_OPEN, kernel);
-    cv::morphologyEx(mask_grass, mask_grass, cv::MORPH_CLOSE, kernel);
-
-    cv::morphologyEx(mask_concrete, mask_concrete, cv::MORPH_OPEN, kernel);
-    cv::morphologyEx(mask_concrete, mask_concrete, cv::MORPH_CLOSE, kernel);
-
-    // Combine masks to get the region of interest
-    cv::Mat combined_mask;
-    cv::bitwise_or(mask_grass, mask_concrete, combined_mask);
-    cv::imwrite(parent_path + "/" + root + "_combined_mask" + ext, combined_mask); // Save combined mask
-    
-    // 4. Edge detection
-    cv::Mat edges;
-    // cv::Canny(blurred, edges, 50, 150); // use Canny on the blurred grayscale image
-    cv::Canny(combined_mask, edges, 50, 150); // use Canny on the combined_mask
-    cv::imwrite(parent_path + "/" + root + "_edges" + ext, edges); // Save edges image
-
-    // get contours
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(edges, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-    cv::Mat output_img = img.clone();
-    cv::drawContours(output_img, contours, -1, cv::Scalar(0, 255, 0), 2); // Green contours
-    // cv::imwrite(output_path, output_img);
-    std::cout << "Boundary detection complete. Output saved to " << output_path << std::endl;
-    return true;
+    // cv::Mat mask_concrete;
+    // cv::Scalar lower_concrete(0, 0, 136);
+    // cv::Scalar upper_concrete(25, 71, 224);
+    // cv::inRange(hsv, lower_concrete, upper_concrete, mask_concrete);
+    // cv::imwrite(parent_path + "/" + root + "_mask_concrete" + ext, mask_concrete); // Save concrete mask, white is concrete
 }
 
 bool detectBoundary_v0(const std::string& image_path, const std::string& output_path) {
