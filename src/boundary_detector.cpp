@@ -1,12 +1,14 @@
 #include "boundary_detector.h"
 #include <iostream>
 #include <filesystem> // For path manipulation
+#include <chrono>
 
 // try to use use Canny on mask, or use canny on gray, gray_blurred, h_channel etc.
 // use cv::bitwise_or to combine mask
 // use cv::GaussianBlur
 
 bool detectBoundary(const std::string& image_path, const std::string& output_path) {
+    // note when image resolution changes, need to adjust kernel size
     // Extract root and extension from image_path
     std::filesystem::path img_path_obj(image_path);
     std::string root = img_path_obj.stem().string();
@@ -19,17 +21,19 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
         return false;
     }
 
+    auto t1 = std::chrono::steady_clock::now();
+
     cv::Mat gray;
     cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
-    cv::imwrite(parent_path + "/" + root + "_gray" + ext, gray);
+    // cv::imwrite(parent_path + "/" + root + "_gray" + ext, gray);
 
     cv::Mat hsv;  // Hue, Saturation, Value
     cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);  // saving hsv directly to image is meaningless for most image viewer. Two pixels seem the same does not mean we cannot split them by true h,s,v value.
     std::vector<cv::Mat> hsv_channels;
     cv::split(hsv, hsv_channels); // hsv_channels[0] = H, hsv_channels[1] = S, hsv_channels[2] = V
-    cv::imwrite(parent_path + "/" + root + "_h" + ext, hsv_channels[0]);
-    cv::imwrite(parent_path + "/" + root + "_s" + ext, hsv_channels[1]);
-    cv::imwrite(parent_path + "/" + root + "_v" + ext, hsv_channels[2]);
+    // cv::imwrite(parent_path + "/" + root + "_h" + ext, hsv_channels[0]);
+    // cv::imwrite(parent_path + "/" + root + "_s" + ext, hsv_channels[1]);
+    // cv::imwrite(parent_path + "/" + root + "_v" + ext, hsv_channels[2]);
 
     // HSV space works well for this scene, whereas Lab space shows no clear patterns. Comment out in case other scenes might need Lab.
     // cv::Mat lab;
@@ -54,51 +58,50 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
     // cv::addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0, grad_magnitude);
     // cv::imwrite(parent_path + "/" + root + "_grad_magnitude" + ext, grad_magnitude);
     // cv::Mat texture_energy;
-    // // 卷积核大一些，比如 15x15 或 21x21, seems not good  均值模糊会保留线条，但中值滤波是线条的克星。
+    // // Larger convolution kernels, e.g., 15x15 or 21x21, seem not good. Mean blur preserves lines, but median blur removes lines.
     // cv::blur(grad_magnitude, texture_energy, cv::Size(33, 33));
     // cv::imwrite(parent_path + "/" + root + "_grad_magnitude_blur" + ext, texture_energy);
     // cv::Mat median_grad;
-    // cv::medianBlur(grad_magnitude, median_grad, 11); // 使用较大的核，如 9 或 11
+    // cv::medianBlur(grad_magnitude, median_grad, 11); // Using a larger kernel, e.g., 9 or 11
     // cv::imwrite(parent_path + "/" + root + "_grad_magnitude_blur_m" + ext, median_grad);
-    // 水泥地的六边形直线纹理太干净、太直了。在频域上，这种直线属于低频成分，普通的模糊很难滤除。
+    // // The hexagonal linear texture of the concrete is too clean and straight. In the frequency domain, such straight lines are low-frequency components, which are difficult to filter out with ordinary blurring.
 
     // mask_grass should contain most part of grass, snow and soil might be excluded(which should be included), edges on concrete might be included (which should be excluded) 
     cv::Mat mask_grass;
     cv::Scalar lower_grass(0, 87, 0);
     cv::Scalar upper_grass(49, 255, 93);
     cv::inRange(hsv, lower_grass, upper_grass, mask_grass);
-    cv::imwrite(parent_path + "/" + root + "_mask_grass" + ext, mask_grass); // white is grass
+    // cv::imwrite(parent_path + "/" + root + "_mask_grass" + ext, mask_grass); // white is grass
 
-    // -------------
-    // --- 3. 补洞处理 (闭运算 MORPH_CLOSE) ---
-    // 目的：把草地里的雪洞、枯草空隙连成一片
-    // 核的大小取决于雪洞的大小，建议用较大的核 (例如 25x25)
+    // --- 3. Hole filling (MORPH_CLOSE) ---
+    // Purpose: To connect snow holes and dry grass gaps in the grass into one piece.
+    // The kernel size depends on the size of the snow holes. A larger kernel (e.g., 25x25) is recommended.
     cv::Mat close_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(25, 25));
     cv::Mat mask_closed;
     cv::morphologyEx(mask_grass, mask_closed, cv::MORPH_CLOSE, close_kernel);
 
-    // --- 4. 去线处理 (开运算 MORPH_OPEN = 先腐蚀后膨胀) ---
-    // 目的：抹去细长的水泥缝隙
-    // 关键点：核的大小必须【大于】水泥缝隙的宽度。
-    // 如果缝隙在图中是 5-10 像素宽，我们用 15x15 的核，缝隙就会因为“腐蚀”而彻底消失
+    // --- 4. Line removal (MORPH_OPEN = erode then dilate) ---
+    // Purpose: To erase thin concrete cracks.
+    // Key point: The kernel size must be [greater than] the width of the concrete cracks.
+    // If the cracks in the image are 5-10 pixels wide, using a 15x15 kernel will make the cracks completely disappear due to "erosion".
     cv::Mat open_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(15, 15));
     cv::Mat mask_opened;
     cv::morphologyEx(mask_closed, mask_opened, cv::MORPH_OPEN, open_kernel);
 
-    // --- 5. 面积过滤 (保留最大连通域) ---
-    // 目的：万一还有残余的杂质，只保留面积最大的那块“草地”
+    // --- 5. Area filtering (keep the largest connected component) ---
+    // Purpose: In case there are residual impurities, only keep the largest "grassland" area.
     std::vector<std::vector<cv::Point>> contours_grass;
     cv::findContours(mask_opened, contours_grass, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
     cv::Mat grass_final = cv::Mat::zeros(img.size(), CV_8UC1);
     if (!contours_grass.empty()) {
-        // 找到面积最大的轮廓
+        // Find the contour with the largest area
         auto it = std::max_element(contours_grass.begin(), contours_grass.end(),
             [](const std::vector<cv::Point>& a, const std::vector<cv::Point>& b) {
                 return cv::contourArea(a) < cv::contourArea(b);
             });
         
-        // 填充该轮廓，彻底抹平内部残留的小孔
+        // Fill the contour to completely flatten small holes remaining inside
         cv::drawContours(grass_final, std::vector<std::vector<cv::Point>>{*it}, -1, 255, -1);
     }
 
@@ -111,6 +114,11 @@ bool detectBoundary(const std::string& image_path, const std::string& output_pat
     // cv::imwrite(output_path, save_image);
     std::vector<std::vector<cv::Point>> final_contours;
     cv::findContours(grass_final, final_contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    auto t2 = std::chrono::steady_clock::now();
+    double total_d = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "total duration:" << total_d << "ms" << std::endl;
 
     // visualization option 1: only draw contour
     // cv::Mat save_img = img.clone();
