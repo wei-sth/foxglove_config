@@ -40,7 +40,7 @@ public:
         this->declare_parameter<int>("num_sectors", 900);
         this->declare_parameter<int>("vis_type", static_cast<int>(VisResultType::BBOX_2D_AND_VOXEL));
         this->declare_parameter<float>("max_distance", 10.0f);
-        this->declare_parameter<float>("min_cluster_z_difference", 0.2f);
+        this->declare_parameter<float>("min_cluster_z_difference", 0.1f);
         this->declare_parameter<std::string>("input_topic", "/rslidar_points"); // /rslidar_points | /unitree/slam_lidar/points
         this->declare_parameter<std::string>("output_topic", "/obstacle_bbox");
         this->declare_parameter<std::string>("voxel_grid_topic", "/obstacle_voxel_grid");

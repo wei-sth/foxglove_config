@@ -109,12 +109,12 @@ int main(int argc, char * argv[]) {
     int num_rings = 96;
     int num_sectors = 900;
     float max_distance = 10.0f; // Aligned with obstacle_detector_node.cpp
-    float min_cluster_z_difference = 0.2f; // Aligned with obstacle_detector_node.cpp
-    VisResultType vis_type = VisResultType::BBOX_GROUND; // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY | VisResultType::BBOX_GROUND_2D
+    float min_cluster_z_difference = 0.1f; // Aligned with obstacle_detector_node.cpp
+    VisResultType vis_type = VisResultType::BBOX_2D_AND_VOXEL; // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY | VisResultType::BBOX_GROUND_2D
 
     RangeImageObstacleDetector detector(num_rings, num_sectors, max_distance, min_cluster_z_difference, vis_type);
     pcl::PointCloud<RSPointDefault>::Ptr rs_cloud_raw(new pcl::PointCloud<RSPointDefault>);
-    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_01_20-15_09_01/rosbag2_2026_01_20-15_09_01_0_logs/rslidar_points/1768892941_704764128.pcd";
+    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_02_03-16_58_33/rosbag2_2026_02_03-16_58_33_0_logs/rslidar_points/1770109122_202835321.pcd";
     if (pcl::io::loadPCDFile<RSPointDefault>(rs_pcd_file_path, *rs_cloud_raw) == -1) {
         PCL_ERROR("Couldn't read file %s \n", rs_pcd_file_path.c_str());
         return (-1);
@@ -140,10 +140,6 @@ int main(int argc, char * argv[]) {
     else if (vis_type == VisResultType::BBOX_GROUND_2D) {
         std::vector<ObstacleBBox2D> rotated_bboxes_2d = detector.getVisBBoxes2D();
         std::cout << "Detected " << rotated_bboxes_2d.size() << " rotated bounding boxes:" << std::endl;
-
-        std::string bbox_json_path = "/home/weizh/data/obstacle_bboxes.json";
-        detector.saveObstacleBBoxes2DToJson(rotated_bboxes_2d, bbox_json_path); // Now generates MTL with transparency
-        std::cout << "Rotated bounding boxes saved to " << bbox_json_path << std::endl;
     }
     // visualization
     pcl::PointCloud<pcl::PointXYZI>::Ptr all_obstacles(new pcl::PointCloud<pcl::PointXYZI>);

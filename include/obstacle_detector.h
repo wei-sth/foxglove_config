@@ -139,7 +139,7 @@ private:
 
     // Fit plane using PCA: ax + by + cz + d = 0
     void estimate_plane(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& cloud, const std::vector<int>& indices, 
-                        Eigen::Vector3f& normal, float& d, float& linearity);
+                        Eigen::Vector3f& normal, float& d, float& linearity, float& planarity);
 };
 
 class RangeImageObstacleDetector {
