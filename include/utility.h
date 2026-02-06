@@ -128,6 +128,9 @@ public:
     float imuGyrBiasN;
     float imuGravity;
     float imuRPYWeight;
+
+    // ext
+    vector<double> lidarToGround;
     vector<double> extRotV;
     vector<double> extRPYV;
     vector<double> extTransV;
@@ -276,6 +279,8 @@ public:
         declare_parameter<float>("imuRPYWeight", 0.01f);
         get_parameter("imuRPYWeight", imuRPYWeight);
 
+        declare_parameter<std::vector<double>>("lidarToGround", std::vector<double>(16, 0.0));
+        get_parameter("lidarToGround", lidarToGround);
         double ida[] = { 1.0,  0.0,  0.0,
                          0.0,  1.0,  0.0,
                          0.0,  0.0,  1.0};

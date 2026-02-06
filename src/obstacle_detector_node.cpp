@@ -1,3 +1,4 @@
+// #include "utility.h"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -38,7 +39,7 @@ public:
         // Declare parameters
         this->declare_parameter<int>("num_rings", 96);
         this->declare_parameter<int>("num_sectors", 900);
-        this->declare_parameter<int>("vis_type", static_cast<int>(VisResultType::BBOX_2D_AND_VOXEL));
+        this->declare_parameter<int>("vis_type", static_cast<int>(VisResultType::JSON_AND_VOXELE)); // JSON_AND_VOXELL: for visualization, JSON_AND_VOXELE: real application
         this->declare_parameter<float>("max_distance", 10.0f);
         this->declare_parameter<float>("min_cluster_z_difference", 0.1f);
         this->declare_parameter<std::string>("input_topic", "/rslidar_points"); // /rslidar_points | /unitree/slam_lidar/points
@@ -143,7 +144,7 @@ private:
         }
 
         // Send 2D BBoxes via MQTT
-        if (vis_type_ == VisResultType::BBOX_GROUND_2D || vis_type_ == VisResultType::BBOX_2D_AND_VOXEL) {
+        if (vis_type_ == VisResultType::BBOX_GROUND_2D || vis_type_ == VisResultType::JSON_AND_VOXELE || vis_type_ == VisResultType::JSON_AND_VOXELL) {
             auto mqtt_lidar_data = detector_->getMqttLidarData(obstacle_clusters);
             if (!mqtt_lidar_data.empty()) {
                 try {
@@ -160,7 +161,7 @@ private:
         }
 
         // Publish VoxelGrid as PointCloud2 for RViz2 visualization
-        if (vis_type_ == VisResultType::BBOX_2D_AND_VOXEL && !obstacle_clusters.empty()) {
+        if ((vis_type_ == VisResultType::JSON_AND_VOXELE || vis_type_ == VisResultType::JSON_AND_VOXELL) && !obstacle_clusters.empty()) {
             float resolution = 0.1f;
             pcl::PointCloud<pcl::PointXYZI>::Ptr voxel_pc(new pcl::PointCloud<pcl::PointXYZI>);
             

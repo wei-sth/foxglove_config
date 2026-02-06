@@ -108,7 +108,9 @@ struct Cell {
     std::vector<int> point_indices;
 };
 
-enum class VisResultType { BBOX_LIDAR_XY, BBOX_GROUND, BBOX_GROUND_2D, BBOX_2D_AND_VOXEL};
+// JSON_AND_VOXELE: json bbox is aligned with axis (ego frame), voxel is in ego frame (ground frame, then front-left-up to right-front-up)
+// JSON_AND_VOXELL: json bbox is aligned with axis (ego frame), voxel is in lidar frame (for visualization, I need to add both original lidar and obstacles to rviz)
+enum class VisResultType { BBOX_LIDAR_XY, BBOX_GROUND, BBOX_GROUND_2D, JSON_AND_VOXELE, JSON_AND_VOXELL};
 
 class WildTerrainSegmenter {
 public:

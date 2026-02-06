@@ -110,11 +110,11 @@ int main(int argc, char * argv[]) {
     int num_sectors = 900;
     float max_distance = 10.0f; // Aligned with obstacle_detector_node.cpp
     float min_cluster_z_difference = 0.1f; // Aligned with obstacle_detector_node.cpp
-    VisResultType vis_type = VisResultType::BBOX_2D_AND_VOXEL; // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY | VisResultType::BBOX_GROUND_2D
+    VisResultType vis_type = VisResultType::JSON_AND_VOXELE; // VisResultType::BBOX_GROUND | VisResultType::BBOX_LIDAR_XY | VisResultType::BBOX_GROUND_2D
 
     RangeImageObstacleDetector detector(num_rings, num_sectors, max_distance, min_cluster_z_difference, vis_type);
     pcl::PointCloud<RSPointDefault>::Ptr rs_cloud_raw(new pcl::PointCloud<RSPointDefault>);
-    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_02_03-16_58_33/rosbag2_2026_02_03-16_58_33_0_logs/rslidar_points/1770109122_202835321.pcd";
+    std::string rs_pcd_file_path = "/home/weizh/data/rosbag2_2026_02_03-16_58_33/rosbag2_2026_02_03-16_58_33_0_logs/rslidar_points/1770109113_585270882.pcd";
     if (pcl::io::loadPCDFile<RSPointDefault>(rs_pcd_file_path, *rs_cloud_raw) == -1) {
         PCL_ERROR("Couldn't read file %s \n", rs_pcd_file_path.c_str());
         return (-1);

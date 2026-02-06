@@ -437,7 +437,7 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
     if (vis_type_ == VisResultType::BBOX_GROUND) {
         bboxes_lidar_frame_ = getObstacleBBoxesFromGround(clusters);
     }
-    else if (vis_type_ == VisResultType::BBOX_GROUND_2D || vis_type_ == VisResultType::BBOX_2D_AND_VOXEL) {
+    else if (vis_type_ == VisResultType::BBOX_GROUND_2D || vis_type_ == VisResultType::JSON_AND_VOXELE) {
         return clusters;
     }
 
@@ -447,6 +447,8 @@ std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> RangeImageObstacleDetector::de
             pcl::transformPointCloud(*cluster, *cluster, sensor_inv_transform_);
         }
     }
+
+    if (vis_type_ == VisResultType::JSON_AND_VOXELL) {return clusters;}
 
     if (vis_type_ == VisResultType::BBOX_LIDAR_XY) {
         bboxes_lidar_frame_ = getObstacleBBoxes(clusters);
