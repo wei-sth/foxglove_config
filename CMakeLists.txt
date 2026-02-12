@@ -39,6 +39,7 @@ include_directories(
 add_executable(obstacle_detector src/obstacle_detector_standalone.cpp src/obstacle_detector.cpp)
 add_executable(boundary_detector src/boundary_detector_standalone.cpp src/boundary_detector.cpp)
 add_executable(obstacle_detector_node src/obstacle_detector_node.cpp src/obstacle_detector.cpp)
+add_executable(localmap_node src/localmap_node.cpp src/obstacle_detector.cpp)
 add_executable(test_vgicp src/test_vgicp.cpp)
 add_executable(test_vio src/test_vio.cpp)
 add_executable(livo src/livo_node.cpp)
@@ -51,6 +52,7 @@ ament_target_dependencies(obstacle_detector_node
   visualization_msgs
   nlohmann_json
 )
+ament_target_dependencies(localmap_node ${ros2_lib})
 ament_target_dependencies(livo ${ros2_lib})
 
 target_link_libraries(obstacle_detector ${PCL_LIBRARIES} ${OpenCV_LIBS} nlohmann_json::nlohmann_json)
@@ -60,6 +62,13 @@ target_link_libraries(obstacle_detector_node
   ${OpenCV_LIBS}
   nlohmann_json::nlohmann_json
   PahoMqttCpp::paho-mqttpp3
+)
+target_link_libraries(localmap_node
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBS}
+  nlohmann_json::nlohmann_json
+  PahoMqttCpp::paho-mqttpp3
+  OpenMP::OpenMP_CXX
 )
 target_link_libraries(test_vgicp
   ${PCL_LIBRARIES}
@@ -74,6 +83,7 @@ install(TARGETS
   obstacle_detector
   boundary_detector
   obstacle_detector_node
+  localmap_node
   test_vgicp
   test_vio
   livo
