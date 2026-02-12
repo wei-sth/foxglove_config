@@ -24,19 +24,21 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     laser_cloud_in_ds.reset(new pcl::PointCloud<PointType>());
     local_map.reset(new pcl::PointCloud<PointType>());
     last_laser_cloud_in.reset(new pcl::PointCloud<PointType>());
+    obstacle_voxel_map.clear();
 
     // publisher
     auto qos_reliable = rclcpp::QoS(10).reliable();
     pub_odom = create_publisher<nav_msgs::msg::Odometry>("/localmap/odometry", qos_reliable);
     pub_cloud_registered = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/cloud_registered", qos_reliable);
     pub_local_map = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/local_map", qos_reliable);
+    pub_obstacle_map = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/obstacle_voxel_grid", qos_reliable);
 
-    // 初始化成员变量
     imu_ptr_cur = 0;
     scan_beg_time = 0;
     scan_end_time = 0;
 
-    // 2. 启动独立的算法工作线程
+    detector_ = std::make_unique<RangeImageObstacleDetector>(nRing, hResolution, detMaxDistance, detMinClusterHeight, vis_type_);
+
     slam_thread = std::thread(&LocalMap::slamProcessLoop, this);
 }
 
@@ -99,6 +101,8 @@ void LocalMap::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) 
         }
     }
 
+    data.cloud_raw.reset(new pcl::PointCloud<RSPointDefault>(std::move(tmp_rs_cloud))); // tmp_rs_cloud becomes empty
+
     std::lock_guard<std::mutex> lock(mtx_buffer);
     lidar_buffer.push_back(data);
     cv_data.notify_one(); // notify slam process
@@ -125,6 +129,27 @@ void LocalMap::slamProcessLoop() {
         }
 
         laser_cloud_in = current_lidar_data.cloud;
+        lock.unlock();  //unlock what?
+
+        // todo: consider deskew of obstacles
+        // todo: consider localization fail
+        Eigen::Affine3f localization_pose;
+        std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters;
+
+        // #pragma omp parallel sections num_threads(2)
+        // {
+        //     #pragma omp section
+        //     {
+        //         performLocalization(cloud_far, localization_pose);
+        //     }
+            
+        //     #pragma omp section
+        //     {
+        //         obstacle_clusters = detector_->detectObstacles(current_lidar_data.cloud_raw);
+        //     }
+        // }
+
+        obstacle_clusters = detector_->detectObstacles(current_lidar_data.cloud_raw);
 
         auto t1 = std::chrono::steady_clock::now();
         processIMU(current_imus);
@@ -137,6 +162,8 @@ void LocalMap::slamProcessLoop() {
         // v1: current scan align to local map, only key frame is added to local map
         performOdometer_v1();
         auto t4 = std::chrono::steady_clock::now();
+
+        updateObstacleVoxelMap(obstacle_clusters, current_pose, scan_end_time);
       
         // 3. 发布结果 (也可以异步发布)
         publishResult();
@@ -151,6 +178,124 @@ void LocalMap::slamProcessLoop() {
         if (total > 0) {
             RCLCPP_INFO(get_logger(), "Time stats: IMU: %.2f%%, Preprocess: %.2f%%, Odom: %.2f%%, Publish: %.2f%%, Total: %.2f ms",
                         d1/total*100.0, d2/total*100.0, d3/total*100.0, d4/total*100.0, total);
+        }
+    }
+}
+
+void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters,
+    const Eigen::Affine3f& pose, double timestamp) {
+    if (obstacle_clusters.empty()) {
+        return;
+    }
+    
+    float resolution = 0.1f;
+    
+    // 1. 体素化并转换到世界坐标系
+    std::map<std::tuple<int, int, int>, Voxel> new_voxels;
+    
+    #pragma omp parallel for
+    for (size_t i = 0; i < obstacle_clusters.size(); ++i) {
+        const auto& cluster = obstacle_clusters[i];
+        std::map<std::tuple<int, int, int>, Voxel> local_voxels;
+        
+        for (const auto& pt : cluster->points) {
+            // 转换到世界坐标系
+            Eigen::Vector3f pt_local(pt.x, pt.y, pt.z);
+            Eigen::Vector3f pt_world = pose * pt_local;
+            
+            // 计算体素坐标
+            int ix = std::floor(pt_world.x() / resolution);
+            int iy = std::floor(pt_world.y() / resolution);
+            int iz = std::floor(pt_world.z() / resolution);
+            
+            auto key = std::make_tuple(ix, iy, iz);
+            
+            if (local_voxels.find(key) == local_voxels.end()) {
+                Voxel voxel;
+                voxel.ix = ix;
+                voxel.iy = iy;
+                voxel.iz = iz;
+                voxel.x = ix * resolution + resolution / 2.0f;
+                voxel.y = iy * resolution + resolution / 2.0f;
+                voxel.z = iz * resolution + resolution / 2.0f;
+                voxel.first_seen_time = timestamp;
+                voxel.last_seen_time = timestamp;
+                voxel.observation_count = 1;
+                voxel.cluster_id = i;
+                voxel.is_dynamic = false;
+                
+                local_voxels[key] = voxel;
+            }
+        }
+        
+        // 合并到new_voxels（需要加锁）
+        #pragma omp critical
+        {
+            for (const auto& kv : local_voxels) {
+                new_voxels[kv.first] = kv.second;
+            }
+        }
+    }
+    
+    // 2. 更新obstacle_voxel_map
+    for (const auto& kv : new_voxels) {
+        const auto& key = kv.first;
+        const auto& new_voxel = kv.second;
+        
+        auto it = obstacle_voxel_map.find(key);
+        if (it != obstacle_voxel_map.end()) {
+            // 已存在，更新时间和观测次数
+            it->second.last_seen_time = timestamp;
+            it->second.observation_count++;
+            
+            // 检查是否是静态（观测3次以上）
+            if (it->second.observation_count >= 3) {
+                it->second.is_dynamic = false;
+            }
+        } else {
+            // 新体素，直接添加
+            obstacle_voxel_map[key] = new_voxel;
+        }
+    }
+    
+    cleanupObstacleVoxelMap(pose, timestamp);
+
+    RCLCPP_DEBUG(get_logger(), "Obstacle voxel map size: %zu", obstacle_voxel_map.size());
+}
+
+void LocalMap::cleanupObstacleVoxelMap(const Eigen::Affine3f& pose, double timestamp) {
+    float max_distance = 10.0f;
+    double timeout = 5.0;
+    
+    auto it = obstacle_voxel_map.begin();
+    while (it != obstacle_voxel_map.end()) {
+        const Voxel& voxel = it->second;
+        
+        // 计算距离当前位置的距离
+        Eigen::Vector3f voxel_pos(voxel.x, voxel.y, voxel.z);
+        float dist = (voxel_pos - pose.translation()).norm();
+        
+        bool should_remove = false;
+        
+        // 条件1：超过最大距离
+        if (dist > max_distance) {
+            should_remove = true;
+        }
+        
+        // 条件2：超时
+        if (timestamp - voxel.last_seen_time > timeout) {
+            should_remove = true;
+        }
+        
+        // 条件3：在视野内但未观测到（需要实现视野判断）
+        // if (isInFOV(voxel, pose) && timestamp - voxel.last_seen_time > 1.0) {
+        //     should_remove = true;
+        // }
+        
+        if (should_remove) {
+            it = obstacle_voxel_map.erase(it);
+        } else {
+            ++it;
         }
     }
 }
@@ -361,8 +506,10 @@ void LocalMap::performOdometer_v1() {
 
         // source and target should have the same resolution for vgicp
         local_map = small_gicp::voxelgrid_sampling(*local_map, 0.2);
+        // debug
         std::string output_pcd_path = "/home/weizh/data/local_map_" + std::to_string(cnt) + ".pcd";
         pcl::io::savePCDFileBinary(output_pcd_path, *local_map);
+        ++cnt;
 
         last_key_pose = current_pose;
     }
@@ -407,6 +554,39 @@ void LocalMap::publishResult() {
 
     if (pub_local_map->get_subscription_count() != 0) {
         publishCloud(pub_local_map, local_map, odom.header.stamp, odometryFrame);
+    }
+
+    // publish obstacle_voxel_map
+
+    // if (pub_obstacle_map->get_subscription_count() == 0) {
+    //     return;
+    // }
+    
+    if (!obstacle_voxel_map.empty()) {
+        pcl::PointCloud<pcl::PointXYZI>::Ptr voxel_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+        voxel_cloud->reserve(obstacle_voxel_map.size());
+        
+        for (const auto& kv : obstacle_voxel_map) {
+            const Voxel& voxel = kv.second;
+
+            pcl::PointXYZI pt;
+            pt.x = voxel.x;
+            pt.y = voxel.y;
+            pt.z = voxel.z;
+            pt.intensity = std::min(255.0f, voxel.observation_count * 50.0f);
+            
+            voxel_cloud->points.push_back(pt);
+        }
+        
+        // voxel_cloud not empty
+        voxel_cloud->width = voxel_cloud->size();
+        voxel_cloud->height = 1;
+        voxel_cloud->is_dense = true;
+        sensor_msgs::msg::PointCloud2 cloud_msg;
+        pcl::toROSMsg(*voxel_cloud, cloud_msg);
+        cloud_msg.header.stamp = rclcpp::Time(static_cast<uint64_t>(scan_end_time * 1e9));
+        cloud_msg.header.frame_id = odometryFrame;
+        pub_obstacle_map->publish(cloud_msg);
     }
 }
 

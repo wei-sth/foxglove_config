@@ -112,12 +112,16 @@ public:
 
     // Lidar Sensor Configuration
     SensorType sensor;
-    int N_SCAN;
-    int Horizon_SCAN;
+    int nRing;
+    int hResolution;
     int downsampleRate;
     int point_filter_num;
     float lidarMinRange;
     float lidarMaxRange;
+
+    // obstacle detector
+    float detMaxDistance;
+    float detMinClusterHeight;
 
     // IMU
     int imuType;
@@ -249,10 +253,10 @@ public:
             rclcpp::shutdown();
         }
 
-        declare_parameter<int>("N_SCAN", 16);
-        get_parameter("N_SCAN", N_SCAN);
-        declare_parameter<int>("Horizon_SCAN", 1800);
-        get_parameter("Horizon_SCAN", Horizon_SCAN);
+        declare_parameter<int>("nRing", 16);
+        get_parameter("nRing", nRing);
+        declare_parameter<int>("hResolution", 1800);
+        get_parameter("hResolution", hResolution);
         declare_parameter<int>("downsampleRate", 1);
         get_parameter("downsampleRate", downsampleRate);
         declare_parameter<int>("point_filter_num", 3);
@@ -261,6 +265,11 @@ public:
         get_parameter("lidarMinRange", lidarMinRange);
         declare_parameter<float>("lidarMaxRange", 1000.0f);
         get_parameter("lidarMaxRange", lidarMaxRange);
+
+        declare_parameter<float>("detMaxDistance", 10.0f);
+        get_parameter("detMaxDistance", detMaxDistance);
+        declare_parameter<float>("detMinClusterHeight", 0.2f);
+        get_parameter("detMinClusterHeight", detMinClusterHeight);
 
         declare_parameter<int>("imuType", 0);
         get_parameter("imuType", imuType);

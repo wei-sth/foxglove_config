@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include "utility.h"
+#include "obstacle_detector.h"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -42,12 +43,14 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_registered;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_local_map;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_map;
 
     // --- Data Buffers ---
     struct LidarData {
         double lidar_frame_beg_time;
         double lidar_frame_end_time;
         pcl::PointCloud<PointType>::Ptr cloud;
+        pcl::PointCloud<RSPointDefault>::Ptr cloud_raw; // temp solution, Wei
     };
     std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_buffer;
     std::deque<LidarData> lidar_buffer;
@@ -69,6 +72,9 @@ private:
     void performOdometer_v1();
     void updateLocalMap();
     void publishResult();
+    void updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters, 
+        const Eigen::Affine3f& pose, double timestamp);
+    void cleanupObstacleVoxelMap(const Eigen::Affine3f& pose, double timestamp);
 
     // --- Undistortion / Deskew ---
     void findRotation(double relTime, float *rotXCur, float *rotYCur, float *rotZCur);
@@ -102,6 +108,10 @@ private:
     pcl::PointCloud<PointType>::Ptr local_map;
     pcl::PointCloud<PointType>::Ptr last_laser_cloud_in;
     bool is_first_frame = true;
+
+    VisResultType vis_type_ = VisResultType::JSON_AND_VOXELE;
+    std::unique_ptr<RangeImageObstacleDetector> detector_;
+    std::map<std::tuple<int, int, int>, Voxel> obstacle_voxel_map;
 };
 
 #endif // LOCALMAP_NODE_H
