@@ -1,6 +1,7 @@
 #ifndef LIVO_NODE_H
 #define LIVO_NODE_H
 
+#include "types.h"
 #include "utility.h"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -14,21 +15,6 @@
 
 #include <small_gicp/pcl/pcl_registration.hpp>
 #include <small_gicp/pcl/pcl_registration_impl.hpp>
-
-// robosense airy, time is relative time, unit:ns
-struct RSPointDefault {
-    PCL_ADD_POINT4D;
-    float intensity;
-    uint16_t ring;
-    uint32_t timestamp;
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-} EIGEN_ALIGN16;
-
-POINT_CLOUD_REGISTER_POINT_STRUCT(RSPointDefault,
-    (float, x, x)(float, y, y)(float, z, z)
-    (float, intensity, intensity)
-    (uint16_t, ring, ring)
-    (uint32_t, timestamp, timestamp))
 
 
 class LivoNode : public ParamServer {

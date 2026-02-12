@@ -343,6 +343,7 @@ void LivoNode::performOdometer() {
 }
 
 void LivoNode::performOdometer_v1() {
+    static int cnt = 1;
     if (is_first_frame) {
         pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
         pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
@@ -393,6 +394,10 @@ void LivoNode::performOdometer_v1() {
 
         // source and target should have the same resolution for vgicp
         local_map = small_gicp::voxelgrid_sampling(*local_map, 0.2);
+        // debug
+        std::string output_pcd_path = "/home/weizh/data/local_map_" + std::to_string(cnt) + ".pcd";
+        pcl::io::savePCDFileBinary(output_pcd_path, *local_map);
+        ++cnt;
 
         last_key_pose = current_pose;
     }
