@@ -9,6 +9,8 @@
 // todo: check https://github.com/koide3/small_gicp/blob/master/src/benchmark/odometry_benchmark_small_gicp_omp.cpp
 
 // todo: 应该针对local map中的所有obstacle划定一个ROI，对这个ROI中的做ray casting，看看是否可行，找到落到这个ROI中的最后一帧lidar的障碍物
+// 在查询 range_image[u][v] 时，不要只查一个像素，可以查周围 3x3 的邻域，取最小值或者进行某种插值，防止因为雷达光束打偏了而误删障碍物。
+// 是否能否跟踪cluster，然后当cluster变得越来越大时，是不是能够判断到底是不是看到的越来越多，还是拖影呢？
 
 static constexpr bool LOCAL_DEBUG = true;
 
@@ -171,6 +173,10 @@ void LocalMap::slamProcessLoop() {
         performOdometer_v1();
         auto t4 = std::chrono::steady_clock::now();
 
+        // remove dynamic by range image
+        auto cloud_filtered_normal = filterByRangeEgo(current_lidar_data.cloud_raw, max_range_);
+        buildRangeImage(cloud_filtered_normal);
+
         updateObstacleVoxelMap(obstacle_clusters, current_pose, scan_end_time);
       
         // 3. 发布结果 (也可以异步发布)
@@ -307,6 +313,142 @@ void LocalMap::cleanupObstacleVoxelMap(const Eigen::Affine3f& pose, double times
         }
     }
 }
+
+pcl::PointCloud<PointType>::Ptr LocalMap::filterByRangeEgo(pcl::PointCloud<RSPointDefault>::Ptr cloud, const double& max_dis) {
+    // todo: consider only do it once, did once in obstacle detector ..., but with different range and frame
+    // Filter by distance, convert to PointType, note result is in sensor frame
+    pcl::PointCloud<PointType>::Ptr filtered_normal(new pcl::PointCloud<PointType>);
+    filtered_normal->points.reserve(cloud->points.size()); // Reserve space
+    
+    for (const auto& pt : cloud->points) {
+        Eigen::Vector3f p(pt.x, pt.y, pt.z);
+        float distance = p.norm();
+        
+        // NaNs are implicitly filtered out because any comparison (>, <, ==) with NaN returns false.
+        if (distance <= max_dis && distance > 0.5f) {  // Min distance 0.5m
+            PointType pt_normal;
+            pt_normal.x = p.x();
+            pt_normal.y = p.y();
+            pt_normal.z = p.z();
+            pt_normal.intensity = pt.intensity;
+            pt_normal.normal_x = static_cast<float>(pt.ring); // Store ring in normal_x
+            pt_normal.normal_y = pt.timestamp; // Store time in normal_y
+            // normal_z, curvature can be left as default or set to 0
+            
+            filtered_normal->points.push_back(pt_normal);
+        }
+    }
+    
+    return filtered_normal;
+}
+
+void LocalMap::buildRangeImage(pcl::PointCloud<PointType>::Ptr cloud) {
+    // since we use min range, must filter out ego cloud first
+
+    range_image_.setTo(std::numeric_limits<float>::max());
+    x_image_.setTo(0);
+    y_image_.setTo(0);
+    z_image_.setTo(0);
+    valid_mask_.setTo(0);
+    
+    for (const auto& pt : cloud->points) {
+        uint16_t ring = static_cast<uint16_t>(pt.normal_x); // Retrieve ring from normal_x
+        if (ring >= nRing) continue;
+        
+        float azimuth = std::atan2(pt.y, pt.x);
+        if (azimuth < 0) azimuth += 2 * M_PI;
+        
+        int col = static_cast<int>(azimuth / (2 * M_PI) * hResolution);
+        col = std::min(col, hResolution - 1);
+        
+        int row = ring;
+        
+        float range = std::sqrt(pt.x * pt.x + pt.y * pt.y + pt.z * pt.z);
+        
+        if (range < range_image_.at<float>(row, col)) {
+            range_image_.at<float>(row, col) = range;
+            x_image_.at<float>(row, col) = pt.x;
+            y_image_.at<float>(row, col) = pt.y;
+            z_image_.at<float>(row, col) = pt.z;
+            valid_mask_.at<uint8_t>(row, col) = 1;
+        }
+    }
+}
+
+int LocalMap::pitchToRow(float pitch_deg) {
+    // the first >= pitch_deg position
+    auto it = std::lower_bound(ring_pitches.begin(), ring_pitches.end(), pitch_deg);
+
+    if (it == ring_pitches.begin()) return 0;
+    if (it == ring_pitches.end()) return nRing - 1;
+
+    auto prev = std::prev(it);
+    int idx;
+    if (pitch_deg - *prev < *it - pitch_deg) {
+        idx = std::distance(ring_pitches.begin(), prev);
+    } else {
+        idx = std::distance(ring_pitches.begin(), it);
+    }
+    return idx;
+}
+
+// void LocalMap::updateVoxelVisibility(const Eigen::Affine3f& current_pose) {
+//     // 遍历全局维护的 Voxel Map
+//     for (auto it = obstacle_voxel_map.begin(); it != obstacle_voxel_map.end(); ) {
+//         Voxel& v = it->second;
+
+//         // 1. 将 Voxel 世界坐标转到当前雷达局部坐标系
+//         // Eigen::Vector3f pt_world(v.x, v.y, v.z);
+//         // Eigen::Vector3f pt_local = current_pose.inverse() * pt_world;
+        
+//         // 假设你已经有了局部坐标 pt_local
+//         float d_v = std::sqrt(pt_local.x()*pt_local.x() + pt_local.y()*pt_local.y() + pt_local.z()*pt_local.z());
+        
+//         // 2. 计算投影到 RangeImage 的坐标
+//         float azimuth = std::atan2(pt_local.y(), pt_local.x());
+//         if (azimuth < 0) azimuth += 2 * M_PI;
+//         int col = static_cast<int>(azimuth / (2 * M_PI) * hResolution);
+//         col = std::min(col, hResolution - 1);
+
+//         float pitch_deg = std::atan2(pt_local.z(), std::sqrt(pt_local.x()*pt_local.x() + pt_local.y()*pt_local.y())) * 180.0 / M_PI;
+//         int row = pitchToRow(pitch_deg);
+
+//         // 3. 可见性校验 (Visibility Test)
+//         bool is_pierced = false; // 是否被穿透
+//         int window_size = 1;     // 考虑到 0.1m Voxel 和 1度线间距，查 3x3 窗口最鲁棒
+        
+//         for (int r = row - window_size; r <= row + window_size; ++r) {
+//             for (int c = col - window_size; c <= col + window_size; ++c) {
+//                 if (r < 0 || r >= nRing || c < 0 || c >= hResolution) continue;
+                
+//                 if (valid_mask_.at<uint8_t>(r, c) == 0) continue; // 没数据，跳过
+
+//                 float d_obs = range_image_.at<float>(r, c);
+                
+//                 // 核心判定：如果观测距离明显大于 Voxel 距离，说明 Voxel 位置变空了
+//                 if (d_obs > d_v + 0.15) { // 0.15m 为容忍偏差
+//                     is_pierced = true;
+//                     break;
+//                 }
+//             }
+//             if (is_pierced) break;
+//         }
+
+//         // 4. 更新 HMM / Log-Odds 状态
+//         if (is_pierced) {
+//             v.observation_count--; // 或者你的 log_odds 逻辑
+//             if (v.observation_count < -5) { // 举例：连续多次没看到，判定动态并删除
+//                 it = obstacle_voxel_map.erase(it);
+//                 continue;
+//             }
+//         } else {
+//             // 如果观测距离接近，可以增加其静态权重
+//             // if (abs(d_obs - d_v) < 0.1) v.observation_count++;
+//         }
+        
+//         ++it;
+//     }
+// }
 
 void LocalMap::processIMU(const std::vector<sensor_msgs::msg::Imu::SharedPtr>& imus) {
     for (const auto& imu_msg : imus) {

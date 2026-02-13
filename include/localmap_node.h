@@ -4,6 +4,7 @@
 #include "types.h"
 #include "utility.h"
 #include "obstacle_detector.h"
+#include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -78,6 +79,9 @@ private:
     void updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters, 
         const Eigen::Affine3f& pose, double timestamp);
     void cleanupObstacleVoxelMap(const Eigen::Affine3f& pose, double timestamp);
+    pcl::PointCloud<PointType>::Ptr filterByRangeEgo(pcl::PointCloud<RSPointDefault>::Ptr cloud, const double& max_dis);
+    void buildRangeImage(pcl::PointCloud<PointType>::Ptr cloud);
+    int pitchToRow(float pitch_deg);
 
     // --- Undistortion / Deskew ---
     void findRotation(double relTime, float *rotXCur, float *rotYCur, float *rotZCur);
@@ -118,6 +122,36 @@ private:
     VisResultType vis_type_;
     std::unique_ptr<RangeImageObstacleDetector> detector_;
     std::map<std::tuple<int, int, int>, Voxel> obstacle_voxel_map;
+    const double max_range_ = 60;  // max range to keep, used to filter out nan and extremely far points. 60m is from robosense airy manual
+    cv::Mat range_image_;
+    cv::Mat x_image_;
+    cv::Mat y_image_;
+    cv::Mat z_image_;
+    cv::Mat valid_mask_;
+
+    // from robosense airy manual (unit: degree), index from 1 to 96
+    const std::vector<float> ring_pitches = {
+        // 1 - 10
+        -0.07, 0.88, 1.81, 2.76, 3.69, 4.62, 5.54, 6.48, 7.41, 8.34,
+        // 11 - 20
+        9.27, 10.21, 11.15, 12.09, 13.03, 13.98, 14.92, 15.87, 16.82, 17.77,
+        // 21 - 30
+        18.72, 19.67, 20.62, 21.57, 22.51, 23.45, 24.4, 25.33, 26.28, 27.21,
+        // 31 - 40
+        28.15, 29.08, 30.02, 30.95, 31.88, 32.82, 33.74, 34.68, 35.62, 36.55,
+        // 41 - 50
+        37.5, 38.43, 39.37, 40.31, 41.25, 42.21, 43.16, 44.09, 45.05, 46.0,
+        // 51 - 60
+        46.95, 47.9, 48.85, 49.8, 50.73, 51.69, 52.62, 53.56, 54.5, 55.45,
+        // 61 - 70
+        56.37, 57.3, 58.24, 59.18, 60.12, 61.05, 61.99, 62.93, 63.86, 64.81,
+        // 71 - 80
+        65.76, 66.69, 67.65, 68.6, 69.56, 70.51, 71.46, 72.42, 73.37, 74.33,
+        // 81 - 90
+        75.29, 76.24, 77.19, 78.14, 79.07, 80.02, 80.96, 81.9, 82.84, 83.78,
+        // 91 - 96
+        84.7, 85.64, 86.57, 87.52, 88.46, 89.4
+    };
 };
 
 #endif // LOCALMAP_NODE_H
