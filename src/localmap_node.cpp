@@ -8,6 +8,9 @@
 // then I change voxelgrid_sampling_omp to voxelgrid_sampling, and set resolution of both source and target to 0.2m (previously source 0.2 and target 0.1), faster
 // todo: check https://github.com/koide3/small_gicp/blob/master/src/benchmark/odometry_benchmark_small_gicp_omp.cpp
 
+// todo: 应该针对local map中的所有obstacle划定一个ROI，对这个ROI中的做ray casting，看看是否可行，找到落到这个ROI中的最后一帧lidar的障碍物
+
+static constexpr bool LOCAL_DEBUG = true;
 
 LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap", options) {
     sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic,
@@ -29,6 +32,7 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     // publisher
     auto qos_reliable = rclcpp::QoS(10).reliable();
     pub_odom = create_publisher<nav_msgs::msg::Odometry>("/localmap/odometry", qos_reliable);
+    pub_path = create_publisher<nav_msgs::msg::Path>("/localmap/path", qos_reliable);
     pub_cloud_registered = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/cloud_registered", qos_reliable);
     pub_local_map = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/local_map", qos_reliable);
     pub_obstacle_map = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/obstacle_voxel_grid", qos_reliable);
@@ -37,6 +41,8 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     scan_beg_time = 0;
     scan_end_time = 0;
 
+    vis_type_ = VisResultType::JSON_AND_VOXELE;
+    if constexpr (LOCAL_DEBUG) { vis_type_ = VisResultType::JSON_AND_VOXELL; }
     detector_ = std::make_unique<RangeImageObstacleDetector>(nRing, hResolution, detMaxDistance, detMinClusterHeight, vis_type_);
 
     slam_thread = std::thread(&LocalMap::slamProcessLoop, this);
@@ -75,12 +81,14 @@ void LocalMap::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg) {
 // we should based on the pose optimized by last lidar align, calculate relative movement from imu
 
 void LocalMap::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+    lidarMsgTimestamp = msg->header.stamp;
+    lidarMsgTimeValue = rclcpp::Time(msg->header.stamp).seconds();
     pcl::PointCloud<RSPointDefault> tmp_rs_cloud;
     pcl::fromROSMsg(*msg, tmp_rs_cloud);
 
     // robosense point time is relative time(unit: ns), msg header timestamp is scan start time
     LidarData data;
-    data.lidar_frame_beg_time = rclcpp::Time(msg->header.stamp).seconds();
+    data.lidar_frame_beg_time = lidarMsgTimeValue;
     data.lidar_frame_end_time = data.lidar_frame_beg_time + 0.1;  // 10Hz
     data.cloud.reset(new pcl::PointCloud<PointType>());
     data.cloud->reserve(tmp_rs_cloud.size());
@@ -506,13 +514,33 @@ void LocalMap::performOdometer_v1() {
 
         // source and target should have the same resolution for vgicp
         local_map = small_gicp::voxelgrid_sampling(*local_map, 0.2);
-        // debug
-        std::string output_pcd_path = "/home/weizh/data/local_map_" + std::to_string(cnt) + ".pcd";
-        pcl::io::savePCDFileBinary(output_pcd_path, *local_map);
-        ++cnt;
+
+        if constexpr (LOCAL_DEBUG) {
+            // std::string output_pcd_path = "/home/weizh/data/local_map_" + std::to_string(cnt) + ".pcd";
+            // pcl::io::savePCDFileBinary(output_pcd_path, *local_map);
+            // ++cnt;
+        }
 
         last_key_pose = current_pose;
     }
+
+    PointTypePose thisPose6D;
+    Eigen::Matrix3f rot = current_pose.linear();
+    Eigen::Quaternionf q(rot);
+    thisPose6D.x = current_pose.translation().x();
+    thisPose6D.y = current_pose.translation().y();
+    thisPose6D.z = current_pose.translation().z();
+    thisPose6D.intensity = 0;  // index
+    Eigen::Matrix3f R = current_pose.rotation();
+    float roll  = atan2(R(2,1), R(2,2));
+    float pitch = atan2(-R(2,0), sqrt(R(2,1)*R(2,1) + R(2,2)*R(2,2)));
+    float yaw   = atan2(R(1,0), R(0,0));
+    thisPose6D.roll = roll;
+    thisPose6D.pitch = pitch;
+    thisPose6D.yaw = yaw;
+    thisPose6D.time = lidarMsgTimeValue;
+    // add pose to path for visualization
+    updatePath(thisPose6D);
 }
 
 void LocalMap::updateLocalMap() {
@@ -531,9 +559,27 @@ void LocalMap::updateLocalMap() {
     }
 }
 
+void LocalMap::updatePath(const PointTypePose& pose_in) {
+    geometry_msgs::msg::PoseStamped pose_stamped;
+    rclcpp::Time t(static_cast<uint32_t>(pose_in.time * 1e9));
+    pose_stamped.header.stamp = t;
+    pose_stamped.header.frame_id = odometryFrame;
+    pose_stamped.pose.position.x = pose_in.x;
+    pose_stamped.pose.position.y = pose_in.y;
+    pose_stamped.pose.position.z = pose_in.z;
+    tf2::Quaternion q;
+    q.setRPY(pose_in.roll, pose_in.pitch, pose_in.yaw);
+    pose_stamped.pose.orientation.x = q.x();
+    pose_stamped.pose.orientation.y = q.y();
+    pose_stamped.pose.orientation.z = q.z();
+    pose_stamped.pose.orientation.w = q.w();
+
+    globalPath.poses.push_back(pose_stamped);
+}
+
 void LocalMap::publishResult() {
     nav_msgs::msg::Odometry odom;
-    odom.header.stamp = rclcpp::Time(static_cast<uint64_t>(scan_end_time * 1e9));
+    odom.header.stamp = lidarMsgTimestamp;
     odom.header.frame_id = odometryFrame;
     odom.child_frame_id = bodyFrame;
 
@@ -548,12 +594,19 @@ void LocalMap::publishResult() {
     odom.pose.pose.position.z = current_pose.translation().z();
     pub_odom->publish(odom);
 
+    // publish path
+    if (pub_path->get_subscription_count() != 0) {
+        globalPath.header.stamp = lidarMsgTimestamp;
+        globalPath.header.frame_id = odometryFrame;
+        pub_path->publish(globalPath);
+    }
+
     pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
     pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
-    publishCloud(pub_cloud_registered, cloud_world, odom.header.stamp, odometryFrame);
+    publishCloud(pub_cloud_registered, cloud_world, lidarMsgTimestamp, odometryFrame);
 
     if (pub_local_map->get_subscription_count() != 0) {
-        publishCloud(pub_local_map, local_map, odom.header.stamp, odometryFrame);
+        publishCloud(pub_local_map, local_map, lidarMsgTimestamp, odometryFrame);
     }
 
     // publish obstacle_voxel_map
@@ -584,7 +637,7 @@ void LocalMap::publishResult() {
         voxel_cloud->is_dense = true;
         sensor_msgs::msg::PointCloud2 cloud_msg;
         pcl::toROSMsg(*voxel_cloud, cloud_msg);
-        cloud_msg.header.stamp = rclcpp::Time(static_cast<uint64_t>(scan_end_time * 1e9));
+        cloud_msg.header.stamp = lidarMsgTimestamp;
         cloud_msg.header.frame_id = odometryFrame;
         pub_obstacle_map->publish(cloud_msg);
     }

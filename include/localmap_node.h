@@ -8,6 +8,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <mutex>
 #include <deque>
 #include <condition_variable>
@@ -41,6 +42,7 @@ private:
 
     // --- Publishers ---
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_registered;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_local_map;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_map;
@@ -71,6 +73,7 @@ private:
     void performOdometer();
     void performOdometer_v1();
     void updateLocalMap();
+    void updatePath(const PointTypePose& pose_in);
     void publishResult();
     void updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters, 
         const Eigen::Affine3f& pose, double timestamp);
@@ -92,6 +95,8 @@ private:
     double scan_beg_time;
     double scan_end_time;
     double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0, last_timestamp_img = -1.0;
+    rclcpp::Time lidarMsgTimestamp;
+    double lidarMsgTimeValue;
 
     float imu_rot_x[2000];
     float imu_rot_y[2000];
@@ -108,8 +113,9 @@ private:
     pcl::PointCloud<PointType>::Ptr local_map;
     pcl::PointCloud<PointType>::Ptr last_laser_cloud_in;
     bool is_first_frame = true;
+    nav_msgs::msg::Path globalPath;
 
-    VisResultType vis_type_ = VisResultType::JSON_AND_VOXELE;
+    VisResultType vis_type_;
     std::unique_ptr<RangeImageObstacleDetector> detector_;
     std::map<std::tuple<int, int, int>, Voxel> obstacle_voxel_map;
 };
