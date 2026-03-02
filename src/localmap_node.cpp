@@ -43,6 +43,12 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     scan_beg_time = 0;
     scan_end_time = 0;
 
+    range_image_ = cv::Mat(nRing, hResolution, CV_32FC1, cv::Scalar(std::numeric_limits<float>::max()));
+    x_image_ = cv::Mat(nRing, hResolution, CV_32FC1, cv::Scalar(0));
+    y_image_ = cv::Mat(nRing, hResolution, CV_32FC1, cv::Scalar(0));
+    z_image_ = cv::Mat(nRing, hResolution, CV_32FC1, cv::Scalar(0));
+    valid_mask_ = cv::Mat(nRing, hResolution, CV_8UC1, cv::Scalar(0));
+
     vis_type_ = VisResultType::JSON_AND_VOXELE;
     if constexpr (LOCAL_DEBUG) { vis_type_ = VisResultType::JSON_AND_VOXELL; }
     detector_ = std::make_unique<RangeImageObstacleDetector>(nRing, hResolution, detMaxDistance, detMinClusterHeight, vis_type_);
@@ -376,6 +382,7 @@ void LocalMap::buildRangeImage(pcl::PointCloud<PointType>::Ptr cloud) {
 }
 
 int LocalMap::pitchToRow(float pitch_deg) {
+    // return [0, nRing - 1]
     // the first >= pitch_deg position
     auto it = std::lower_bound(ring_pitches.begin(), ring_pitches.end(), pitch_deg);
 
@@ -785,6 +792,121 @@ void LocalMap::publishResult() {
     }
 }
 
+void LocalMap::removeDynamicObjTest() {
+    // assume dynamicObj is from pre lidar frames, rs_cur_cloud is current lidar frame, both in global frame
+    pcl::PointCloud<RSPointDefault>::Ptr rs_cur_cloud(new pcl::PointCloud<RSPointDefault>);
+    std::string rs_cur_cloud_fp = "/home/weizh/data/1769046781_303218842.pcd";
+    pcl::io::loadPCDFile<RSPointDefault>(rs_cur_cloud_fp, *rs_cur_cloud);
+    std::cout << "Loaded " << rs_cur_cloud->width * rs_cur_cloud->height << " data points from " << rs_cur_cloud_fp << std::endl;
+
+    // load fake dynamic pcd, convert dynamicObj -> cluster cloud (XYZI), build a new obstacle_voxel_map
+    // _fake_dynamic.pcd is obtained manually from cloudcompare by segment obstacle from 1769046781_303218842.pcd -> move -> delete scalar fields -> save, 
+    // in _fake_dynamic.pcd, VIEWPOINT is not 0 0 0 1 0 0 0, x y z are still the values in 1769046781_303218842.pcd, cloud compare shows its x y z and position after VIEWPOINT calculation
+    // so we need to convert dynamicObj to world frame
+    pcl::PointCloud<pcl::PointXYZ>::Ptr dynamicObj(new pcl::PointCloud<pcl::PointXYZ>);
+    std::string dynamicObjFp = "/home/weizh/data/1769046781_303218842_fake_dynamic.pcd";
+    pcl::io::loadPCDFile<pcl::PointXYZ>(dynamicObjFp, *dynamicObj);
+    std::cout << "Loaded " << dynamicObj->width * dynamicObj->height << " data points from " << dynamicObjFp << std::endl;
+    // convert
+    // sensor_origin_ is Eigen::Vector4f (x, y, z, 1)
+    // sensor_orientation_ is Eigen::Quaternionf (w, x, y, z)
+    Eigen::Affine3f transform = Eigen::Affine3f::Identity();
+    transform.translate(dynamicObj->sensor_origin_.head<3>());
+    transform.rotate(dynamicObj->sensor_orientation_);
+    pcl::transformPointCloud(*dynamicObj, *dynamicObj, transform); // overwrite
+    dynamicObj->sensor_origin_ = Eigen::Vector4f::Zero();
+    dynamicObj->sensor_orientation_ = Eigen::Quaternionf::Identity();
+    
+    // test pitchToRow, this function needs to work properly. Result shows ring is OK, but hard to tell if good enough.
+    pcl::PointCloud<RSPointDefault>::Ptr dynamicObjWithRow(new pcl::PointCloud<RSPointDefault>());
+    dynamicObjWithRow->reserve(dynamicObj->size());
+    for (const auto& p : dynamicObj->points) {
+        RSPointDefault q;
+        q.x = p.x;
+        q.y = p.y;
+        q.z = p.z;
+        float pitch_deg = std::atan2(p.z, std::sqrt(p.x*p.x + p.y*p.y)) * 180.0 / M_PI;
+        q.ring = pitchToRow(pitch_deg);
+        dynamicObjWithRow->push_back(q);
+    }
+    pcl::io::savePCDFileBinary("/home/weizh/data/1769046781_303218842_fake_dynamic_row.pcd", *dynamicObjWithRow);
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr dyn_cluster(new pcl::PointCloud<pcl::PointXYZI>());
+    dyn_cluster->reserve(dynamicObj->size());
+    for (const auto& p : dynamicObj->points) {
+        pcl::PointXYZI q;
+        q.x = p.x;
+        q.y = p.y;
+        q.z = p.z;
+        q.intensity = 1.0f;
+        dyn_cluster->push_back(q);
+    }
+    std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> obstacle_clusters;
+    obstacle_clusters.push_back(dyn_cluster);
+    obstacle_voxel_map.clear();
+    const Eigen::Affine3f pose = Eigen::Affine3f::Identity();
+    const double timestamp = 0.0;
+    updateObstacleVoxelMap(obstacle_clusters, pose, timestamp);
+
+    // build range image for both
+    auto cloud_filtered_normal = filterByRangeEgo(rs_cur_cloud, max_range_);
+    buildRangeImage(cloud_filtered_normal);
+
+    // use ray casting to check if voxel is dynamic, since range image is based on current lidar frame, not global frame, need to convert voxel map to current lidar frame
+    pcl::PointCloud<pcl::PointXYZI>::Ptr raycast_res(new pcl::PointCloud<pcl::PointXYZI>());
+    raycast_res->reserve(obstacle_voxel_map.size());
+    for (auto it = obstacle_voxel_map.begin(); it != obstacle_voxel_map.end(); ) {
+        Voxel& v = it->second;
+
+        // convert voxel from world to local frame, pt_world = pt_local in this test case
+        Eigen::Vector3f pt_world(v.x, v.y, v.z);
+        Eigen::Vector3f pt_local = pose.inverse() * pt_world;
+        float d_v = std::sqrt(pt_local.x()*pt_local.x() + pt_local.y()*pt_local.y() + pt_local.z()*pt_local.z());
+        
+        // calculate coords in range image
+        float azimuth = std::atan2(pt_local.y(), pt_local.x());
+        if (azimuth < 0) azimuth += 2 * M_PI;
+        int col = static_cast<int>(azimuth / (2 * M_PI) * hResolution);
+        col = std::min(col, hResolution - 1);
+        float pitch_deg = std::atan2(pt_local.z(), std::sqrt(pt_local.x()*pt_local.x() + pt_local.y()*pt_local.y())) * 180.0 / M_PI;
+        int row = pitchToRow(pitch_deg);
+
+        std::cout << "process voxel row = " << row << ", col = " << col << std::endl;
+
+        // visibility test
+        bool is_traversed = false;  // is traversed by ray
+        int window_size = 1;     // 考虑到 0.1m Voxel 和 1度线间距，查 3x3 窗口最鲁棒
+        
+        for (int r = row - window_size; r <= row + window_size; ++r) {
+            for (int c = col - window_size; c <= col + window_size; ++c) {
+                if (r < 0 || r >= nRing || c < 0 || c >= hResolution) continue;
+                
+                if (valid_mask_.at<uint8_t>(r, c) == 0) continue; // 没数据，跳过
+
+                float d_obs = range_image_.at<float>(r, c);
+                
+                // 核心判定：如果观测距离明显大于 Voxel 距离，说明 Voxel 位置变空了
+                if (d_obs > d_v + 0.15) { // 0.15m 为容忍偏差
+                    is_traversed = true;
+                    break;
+                }
+            }
+            if (is_traversed) break;
+        }
+
+        pcl::PointXYZI q;
+        q.x = pt_local.x();
+        q.y = pt_local.y();
+        q.z = pt_local.z();
+        q.intensity = is_traversed ? 1.0f : 2.0f;  // is_traversed (dynamic) use intensity 1.0
+        raycast_res->push_back(q);
+        
+        ++it;
+    }
+
+    pcl::io::savePCDFileBinary("/home/weizh/data/1769046781_303218842_static_vs_dynamic.pcd", *raycast_res);
+}
+
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
   
@@ -792,6 +914,8 @@ int main(int argc, char** argv) {
     options.use_intra_process_comms(true);
 
     auto node = std::make_shared<LocalMap>(options);
+    node->removeDynamicObjTest(); // offline test
+
     rclcpp::spin(node);
   
     rclcpp::shutdown();

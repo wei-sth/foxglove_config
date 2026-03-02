@@ -36,6 +36,8 @@ public:
     LocalMap(const rclcpp::NodeOptions & options);
     ~LocalMap();
 
+    void removeDynamicObjTest();
+
 private:
     // --- Subscriptions ---
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;
@@ -129,7 +131,7 @@ private:
     cv::Mat z_image_;
     cv::Mat valid_mask_;
 
-    // from robosense airy manual (unit: degree), index from 1 to 96
+    // from robosense airy manual (unit: degree), 96 rings in total, ring index from 0 to 95
     const std::vector<float> ring_pitches = {
         // 1 - 10
         -0.07, 0.88, 1.81, 2.76, 3.69, 4.62, 5.54, 6.48, 7.41, 8.34,
