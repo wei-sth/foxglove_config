@@ -1,5 +1,8 @@
 #include "localmap_node.h"
 #include <chrono>
+#include <fstream>
+#include <string>
+#include "obstacle.pb.h"
 #include <small_gicp/util/downsampling.hpp>
 #include <small_gicp/util/downsampling_omp.hpp>
 // downsample by 0.1m does not improve
@@ -765,11 +768,36 @@ void LocalMap::publishObstacleMapTimerCb() {
     cloud_msg.header.stamp = lidarMsgTimestamp;
     cloud_msg.header.frame_id = odometryFrame;
     pub_obstacle_map->publish(cloud_msg);
+
+    // Also dump obstacle voxels to a protobuf file for debugging file size.
+    // File name: /home/weizh/data/voxel_cloud_<timestamp>.pb
+    {
+        foxglove_config::VoxelCloud pb_cloud;
+        pb_cloud.set_timestamp(static_cast<uint64_t>(lidarMsgTimestamp.nanoseconds()));
+        pb_cloud.set_resolution(0.1f);
+
+        pb_cloud.mutable_voxels()->Reserve(static_cast<int>(voxels_snapshot.size()));
+        for (const auto& voxel : voxels_snapshot) {
+            auto* v = pb_cloud.add_voxels();
+            v->set_x(voxel.x);
+            v->set_y(voxel.y);
+            v->set_z(voxel.z);
+        }
+
+        const std::string out_path =
+            std::string("/home/weizh/data/voxel_cloud_") + std::to_string(pb_cloud.timestamp()) + ".pb";
+
+        std::ofstream ofs(out_path, std::ios::out | std::ios::binary | std::ios::trunc);
+        if (ofs.is_open()) {
+            pb_cloud.SerializeToOstream(&ofs);
+            ofs.close();
+        }
+    }
 }
 
 void LocalMap::publishResult() {
     // publish odom, path, registered cloud; obstacle_voxel_map is published by timer (see publishObstacleMapTimerCb)
-    // only called in debug, since release requires json
+    // only called in debug, since release requires specific data format (data consumer not ros based)
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = lidarMsgTimestamp;
     odom.header.frame_id = odometryFrame;

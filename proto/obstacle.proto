@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package foxglove_config;
+
+// obstacle voxel center coord
+message Voxel {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message VoxelCloud {
+  uint64 timestamp = 1;      // nanoseconds since epoch (ROS2 Time)
+  float resolution = 2;      // voxel resolution (e.g. 0.1 meter)
+  repeated Voxel voxels = 3; // voxel list
+}

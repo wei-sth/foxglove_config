@@ -27,19 +27,27 @@ find_package(visualization_msgs REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(PahoMqttCpp REQUIRED)
+find_package(Protobuf REQUIRED)
 
 set(ros2_lib "rclcpp;rclpy;std_msgs;sensor_msgs;geometry_msgs;nav_msgs;cv_bridge;pcl_msgs;pcl_conversions;visualization_msgs;tf2;tf2_ros;tf2_eigen;tf2_sensor_msgs;tf2_geometry_msgs;nlohmann_json")
 
+# generated obstacle.pb.h and obstacle.pb.cc are located in /build/foxglove_config/, so need to include ${CMAKE_CURRENT_BINARY_DIR}
 include_directories(
   include
   ${PCL_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
+  ${Protobuf_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_BINARY_DIR}
 )
+
+# protobuf (generated from proto/obstacle.proto)
+set(OBSTACLE_PROTO_FILE proto/obstacle.proto)
+protobuf_generate_cpp(OBSTACLE_PROTO_SRCS OBSTACLE_PROTO_HDRS ${OBSTACLE_PROTO_FILE})
 
 add_executable(obstacle_detector src/obstacle_detector_standalone.cpp src/obstacle_detector.cpp)
 add_executable(boundary_detector src/boundary_detector_standalone.cpp src/boundary_detector.cpp)
 add_executable(obstacle_detector_node src/obstacle_detector_node.cpp src/obstacle_detector.cpp)
-add_executable(localmap_node src/localmap_node.cpp src/obstacle_detector.cpp)
+add_executable(localmap_node src/localmap_node.cpp src/obstacle_detector.cpp ${OBSTACLE_PROTO_SRCS})
 add_executable(test_vgicp src/test_vgicp.cpp)
 add_executable(test_vio src/test_vio.cpp)
 add_executable(livo src/livo_node.cpp)
@@ -69,6 +77,7 @@ target_link_libraries(localmap_node
   nlohmann_json::nlohmann_json
   PahoMqttCpp::paho-mqttpp3
   OpenMP::OpenMP_CXX
+  ${Protobuf_LIBRARIES}
 )
 target_link_libraries(test_vgicp
   ${PCL_LIBRARIES}
