@@ -8,9 +8,10 @@
 // then I change voxelgrid_sampling_omp to voxelgrid_sampling, and set resolution of both source and target to 0.2m (previously source 0.2 and target 0.1), faster
 // todo: check https://github.com/koide3/small_gicp/blob/master/src/benchmark/odometry_benchmark_small_gicp_omp.cpp
 
+// Dynamic objects can leave “ghost trails” in obstacle_voxel_map (clusters appear to grow), but an expanding cluster is not always dynamic—it can also be a long, static fence near the FOV boundary that looks longer as the mower moves.
+
 // todo: 应该针对local map中的所有obstacle划定一个ROI，对这个ROI中的做ray casting，看看是否可行，找到落到这个ROI中的最后一帧lidar的障碍物
 // 在查询 range_image[u][v] 时，不要只查一个像素，可以查周围 3x3 的邻域，取最小值或者进行某种插值，防止因为雷达光束打偏了而误删障碍物。
-// 是否能否跟踪cluster，然后当cluster变得越来越大时，是不是能够判断到底是不是看到的越来越多，还是拖影呢？
 
 static constexpr bool LOCAL_DEBUG = true;
 
@@ -793,6 +794,10 @@ void LocalMap::publishResult() {
 }
 
 void LocalMap::removeDynamicObjTest() {
+    // offline test
+    // current problem:
+    // 1. a tall dynamic object cannot be fully identified as dynamic, the lower part is traversed by ray, but the higher part has no points behind it
+    // 2. voxel x y z might exceed the boundary of original object, thus there might be points behind it even though it is not dynamic.
     // assume dynamicObj is from pre lidar frames, rs_cur_cloud is current lidar frame, both in global frame
     pcl::PointCloud<RSPointDefault>::Ptr rs_cur_cloud(new pcl::PointCloud<RSPointDefault>);
     std::string rs_cur_cloud_fp = "/home/weizh/data/1769046781_303218842.pcd";
@@ -870,8 +875,6 @@ void LocalMap::removeDynamicObjTest() {
         col = std::min(col, hResolution - 1);
         float pitch_deg = std::atan2(pt_local.z(), std::sqrt(pt_local.x()*pt_local.x() + pt_local.y()*pt_local.y())) * 180.0 / M_PI;
         int row = pitchToRow(pitch_deg);
-
-        std::cout << "process voxel row = " << row << ", col = " << col << std::endl;
 
         // visibility test
         bool is_traversed = false;  // is traversed by ray
