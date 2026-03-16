@@ -39,6 +39,8 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     pub_cloud_registered = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/cloud_registered", qos_reliable);
     pub_local_map = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/local_map", qos_reliable);
     pub_obstacle_map = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/obstacle_voxel_grid", qos_reliable);
+    // publish obstacle_voxel_map snapshot each 100ms
+    timer_pub_obstacles_ = create_wall_timer(std::chrono::milliseconds(100), std::bind(&LocalMap::publishObstacleMapTimerCb, this));
 
     imu_ptr_cur = 0;
     scan_beg_time = 0;
@@ -185,9 +187,10 @@ void LocalMap::slamProcessLoop() {
         buildRangeImage(cloud_filtered_normal);
 
         updateObstacleVoxelMap(obstacle_clusters, current_pose, scan_end_time);
-      
-        // 3. 发布结果 (也可以异步发布)
-        publishResult();
+
+        if constexpr (LOCAL_DEBUG) {
+            publishResult();
+        }
         auto t5 = std::chrono::steady_clock::now();
 
         double d1 = std::chrono::duration<double, std::milli>(t2 - t1).count();
@@ -205,6 +208,7 @@ void LocalMap::slamProcessLoop() {
 
 void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters,
     const Eigen::Affine3f& pose, double timestamp) {
+    std::lock_guard<std::mutex> lock(mtx_obstacle_map_);
     if (obstacle_clusters.empty()) {
         return;
     }
@@ -727,7 +731,45 @@ void LocalMap::updatePath(const PointTypePose& pose_in) {
     globalPath.poses.push_back(pose_stamped);
 }
 
+void LocalMap::publishObstacleMapTimerCb() {
+    if (lidarMsgTimestamp.nanoseconds() == 0) {
+        return;
+    }
+
+    // Make a snapshot copy to minimize lock hold time
+    std::vector<Voxel> voxels_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(mtx_obstacle_map_);
+        voxels_snapshot.reserve(obstacle_voxel_map.size());
+        for (const auto& kv : obstacle_voxel_map) {
+            voxels_snapshot.push_back(kv.second);
+        }
+    }
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr voxel_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+    voxel_cloud->reserve(voxels_snapshot.size());
+    for (const auto& voxel : voxels_snapshot) {
+        pcl::PointXYZI pt;
+        pt.x = voxel.x;
+        pt.y = voxel.y;
+        pt.z = voxel.z;
+        pt.intensity = std::min(255.0f, voxel.observation_count * 50.0f);
+        voxel_cloud->points.push_back(pt);
+    }
+    voxel_cloud->width = voxel_cloud->size();
+    voxel_cloud->height = 1;
+    voxel_cloud->is_dense = true;
+
+    sensor_msgs::msg::PointCloud2 cloud_msg;
+    pcl::toROSMsg(*voxel_cloud, cloud_msg);
+    cloud_msg.header.stamp = lidarMsgTimestamp;
+    cloud_msg.header.frame_id = odometryFrame;
+    pub_obstacle_map->publish(cloud_msg);
+}
+
 void LocalMap::publishResult() {
+    // publish odom, path, registered cloud; obstacle_voxel_map is published by timer (see publishObstacleMapTimerCb)
+    // only called in debug, since release requires json
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = lidarMsgTimestamp;
     odom.header.frame_id = odometryFrame;
@@ -757,39 +799,6 @@ void LocalMap::publishResult() {
 
     if (pub_local_map->get_subscription_count() != 0) {
         publishCloud(pub_local_map, local_map, lidarMsgTimestamp, odometryFrame);
-    }
-
-    // publish obstacle_voxel_map
-
-    // if (pub_obstacle_map->get_subscription_count() == 0) {
-    //     return;
-    // }
-    
-    if (!obstacle_voxel_map.empty()) {
-        pcl::PointCloud<pcl::PointXYZI>::Ptr voxel_cloud(new pcl::PointCloud<pcl::PointXYZI>());
-        voxel_cloud->reserve(obstacle_voxel_map.size());
-        
-        for (const auto& kv : obstacle_voxel_map) {
-            const Voxel& voxel = kv.second;
-
-            pcl::PointXYZI pt;
-            pt.x = voxel.x;
-            pt.y = voxel.y;
-            pt.z = voxel.z;
-            pt.intensity = std::min(255.0f, voxel.observation_count * 50.0f);
-            
-            voxel_cloud->points.push_back(pt);
-        }
-        
-        // voxel_cloud not empty
-        voxel_cloud->width = voxel_cloud->size();
-        voxel_cloud->height = 1;
-        voxel_cloud->is_dense = true;
-        sensor_msgs::msg::PointCloud2 cloud_msg;
-        pcl::toROSMsg(*voxel_cloud, cloud_msg);
-        cloud_msg.header.stamp = lidarMsgTimestamp;
-        cloud_msg.header.frame_id = odometryFrame;
-        pub_obstacle_map->publish(cloud_msg);
     }
 }
 
@@ -917,7 +926,7 @@ int main(int argc, char** argv) {
     options.use_intra_process_comms(true);
 
     auto node = std::make_shared<LocalMap>(options);
-    node->removeDynamicObjTest(); // offline test
+    // node->removeDynamicObjTest(); // offline test
 
     rclcpp::spin(node);
   

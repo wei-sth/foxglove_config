@@ -50,6 +50,11 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_local_map;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_map;
 
+    // --- Timers (independent publishers) ---
+    rclcpp::TimerBase::SharedPtr timer_pub_obstacles_;
+    void publishObstacleMapTimerCb();
+    std::mutex mtx_obstacle_map_;
+
     // --- Data Buffers ---
     struct LidarData {
         double lidar_frame_beg_time;
