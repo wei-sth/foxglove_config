@@ -4,6 +4,9 @@
 #include <string>
 #include <small_gicp/util/downsampling.hpp>
 #include <small_gicp/util/downsampling_omp.hpp>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 // robosense airy frame_id: rslidar
 // bbox is not suitable for indoor, I tried to use nav2_msgs/msg/VoxelGrid, but rviz cannot show
@@ -201,7 +204,6 @@ void LocalMap::slamProcessLoop() {
         auto t3 = std::chrono::steady_clock::now();
         // v0: current scan align to pre scan, use pre pose as initial guess, not good for long duration
         // performOdometer();
-        // updateLocalMap();
         // v1: current scan align to local map, only key frame is added to local map
         performOdometer_v1();
         auto t4 = std::chrono::steady_clock::now();
@@ -223,10 +225,8 @@ void LocalMap::slamProcessLoop() {
         double d4 = std::chrono::duration<double, std::milli>(t5 - t4).count();
         double total = d1 + d2 + d3 + d4;
 
-        if (total > 0) {
-            RCLCPP_INFO(get_logger(), "Time stats: IMU: %.2f%%, Preprocess: %.2f%%, Odom: %.2f%%, Publish: %.2f%%, Total: %.2f ms",
-                        d1/total*100.0, d2/total*100.0, d3/total*100.0, d4/total*100.0, total);
-        }
+        recordSlamLoopTotalMs_(total);
+        // RCLCPP_INFO(get_logger(), "Time stats: IMU: %.2f%%, Preprocess: %.2f%%, Odom: %.2f%%, Publish: %.2f%%, Total: %.2f ms", d1/total*100.0, d2/total*100.0, d3/total*100.0, d4/total*100.0, total);
     }
 }
 
@@ -721,22 +721,6 @@ void LocalMap::performOdometer_v1() {
     updatePath(thisPose6D);
 }
 
-void LocalMap::updateLocalMap() {
-    if (laser_cloud_in_ds->empty()) return;
-
-    // 将当前帧转换到世界坐标系
-    pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
-    pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
-
-    // 更新局部地图 (简单叠加，实际应用中可能需要降采样或滑动窗口)
-    *local_map += *cloud_world;
-
-    // 简单的局部地图规模控制：如果点数过多，进行体素滤波
-    if (local_map->size() > 100000) {
-        local_map = small_gicp::voxelgrid_sampling(*local_map, 0.5);
-    }
-}
-
 void LocalMap::updatePath(const PointTypePose& pose_in) {
     geometry_msgs::msg::PoseStamped pose_stamped;
     rclcpp::Time t(static_cast<uint32_t>(pose_in.time * 1e9));
@@ -975,6 +959,34 @@ void LocalMap::removeDynamicObjTest() {
     pcl::io::savePCDFileBinary("/home/weizh/data/1769046781_303218842_static_vs_dynamic.pcd", *raycast_res);
 }
 
+void LocalMap::recordSlamLoopTotalMs_(double total_ms) {
+    std::lock_guard<std::mutex> lk(mtx_timing_);
+    slam_total_ms_.push_back(total_ms);
+}
+
+void LocalMap::dumpSlamLoopTotalCsv_(const std::string& out_path) {
+    std::vector<double> snapshot;
+    {
+        std::lock_guard<std::mutex> lk(mtx_timing_);
+        snapshot = slam_total_ms_;
+    }
+
+    std::ofstream ofs(out_path, std::ios::out | std::ios::trunc);
+    if (!ofs.is_open()) {
+        RCLCPP_ERROR(get_logger(), "Failed to open csv output: %s", out_path.c_str());
+        return;
+    }
+
+    // single column csv
+    ofs << "total_ms\n";
+    for (double v : snapshot) {
+        ofs << std::fixed << std::setprecision(6) << v << "\n";
+    }
+    ofs.close();
+
+    RCLCPP_INFO(get_logger(), "Saved slam total(ms) csv: %s (rows=%zu)", out_path.c_str(), snapshot.size());
+}
+
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
   
@@ -985,7 +997,19 @@ int main(int argc, char** argv) {
     // node->removeDynamicObjTest(); // offline test
 
     rclcpp::spin(node);
-  
+
+    // Save once right before exit.
+    {
+        std::time_t now = std::time(nullptr);
+        std::tm tm_local{};
+        localtime_r(&now, &tm_local);
+        std::ostringstream oss;
+        oss << "/home/weizh/data/slam_total_"
+            << std::put_time(&tm_local, "%Y%m%d_%H%M%S")
+            << ".csv";
+        node->dumpSlamLoopTotalCsv_(oss.str());
+    }
+
     rclcpp::shutdown();
     return 0;
 }

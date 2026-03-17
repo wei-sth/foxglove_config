@@ -2,7 +2,7 @@
   ros__parameters:
     # Topics
     pointCloudTopic: "/rslidar_points"    # Point cloud data
-    imuTopic: "/rslidar_imu_data"                         # IMU data, /camera/imu | /utlidar/imu
+    imuTopic: "/rslidar_imu_data"                         # IMU data, /camera/imu | /utlidar/imu | /rslidar_imu_data
     odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
 
     # Frames

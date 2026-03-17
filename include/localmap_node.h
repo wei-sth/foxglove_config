@@ -40,6 +40,11 @@ public:
 
     void removeDynamicObjTest();
 
+    // debug, save slamProcessLoop total time on exit
+    void recordSlamLoopTotalMs_(double total_ms);
+    void dumpSlamLoopTotalCsv_(const std::string& out_path);
+    std::mutex mtx_timing_;
+    std::vector<double> slam_total_ms_;
 private:
     // --- Subscriptions ---
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;
@@ -82,7 +87,6 @@ private:
     void pointCloudPreprocessing();
     void performOdometer();
     void performOdometer_v1();
-    void updateLocalMap();
     void updatePath(const PointTypePose& pose_in);
     void publishResult();
     void updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters, 
