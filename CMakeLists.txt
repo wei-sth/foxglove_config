@@ -51,6 +51,7 @@ add_executable(localmap_node src/localmap_node.cpp src/obstacle_detector.cpp ${O
 add_executable(test_vgicp src/test_vgicp.cpp)
 add_executable(test_vio src/test_vio.cpp)
 add_executable(livo src/livo_node.cpp)
+add_executable(proto_viewer src/proto_viewer.cpp ${OBSTACLE_PROTO_SRCS})
 
 ament_target_dependencies(obstacle_detector_node
   rclcpp
@@ -87,6 +88,10 @@ target_link_libraries(livo
   ${PCL_LIBRARIES}
   OpenMP::OpenMP_CXX
 )
+target_link_libraries(proto_viewer
+  ${PCL_LIBRARIES}
+  ${Protobuf_LIBRARIES}
+)
 
 install(TARGETS
   obstacle_detector
@@ -96,6 +101,7 @@ install(TARGETS
   test_vgicp
   test_vio
   livo
+  proto_viewer
   DESTINATION lib/${PROJECT_NAME}
 )
 
