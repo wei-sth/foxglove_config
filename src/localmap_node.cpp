@@ -2,9 +2,16 @@
 #include <chrono>
 #include <fstream>
 #include <string>
-#include "obstacle.pb.h"
 #include <small_gicp/util/downsampling.hpp>
 #include <small_gicp/util/downsampling_omp.hpp>
+
+// robosense airy frame_id: rslidar
+// bbox is not suitable for indoor, I tried to use nav2_msgs/msg/VoxelGrid, but rviz cannot show
+// so use pointcloud, set style as boxes, size = 0.1
+// MQTT broker kicks the older client if a new one connects with the same ID. 
+// Using a unique ID for each device to avoid connection loops. I use "obstacle_client_pc" (need to use yaml in the future)
+// mqtt ip to be used: 127.0.0.1 | 124.221.132.177
+
 // downsample by 0.1m does not improve
 // downsample by 0.2m, setNumNeighborsForCovariance(20) from 40 improves
 // without setting other params (num of threads ...), voxelgrid_sampling_omp seems slower than pcl::VoxelGrid
@@ -18,7 +25,21 @@
 
 static constexpr bool LOCAL_DEBUG = true;
 
-LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap", options) {
+LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap", options), mqtt_client_("tcp://127.0.0.1:1883", "obstacle_client_jetson") {
+    mqtt_client_.set_callback(*this);
+    mqtt_conn_opts_.set_user_name("zbtest");
+    mqtt_conn_opts_.set_password("zbtest");
+    mqtt_conn_opts_.set_keep_alive_interval(5);
+    mqtt_conn_opts_.set_connect_timeout(5);
+    mqtt_conn_opts_.set_clean_session(true);
+    mqtt_conn_opts_.set_automatic_reconnect(true);
+    try {
+        mqtt_client_.connect(mqtt_conn_opts_)->wait();
+        RCLCPP_INFO(this->get_logger(), "Connected to MQTT Broker");
+    } catch (const mqtt::exception& exc) {
+        RCLCPP_ERROR(this->get_logger(), "MQTT Connection failed: %s", exc.what());
+    }
+
     sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic,
         rclcpp::QoS(rclcpp::KeepLast(10000)).reliable(),
         std::bind(&LocalMap::imuHandler, this, std::placeholders::_1));
@@ -769,30 +790,37 @@ void LocalMap::publishObstacleMapTimerCb() {
     cloud_msg.header.frame_id = odometryFrame;
     pub_obstacle_map->publish(cloud_msg);
 
-    // Also dump obstacle voxels to a protobuf file for debugging file size.
-    // File name: /home/weizh/data/voxel_cloud_<timestamp>.pb
-    {
-        foxglove_config::VoxelCloud pb_cloud;
-        pb_cloud.set_timestamp(static_cast<uint64_t>(lidarMsgTimestamp.nanoseconds()));
-        pb_cloud.set_resolution(0.1f);
-
-        pb_cloud.mutable_voxels()->Reserve(static_cast<int>(voxels_snapshot.size()));
-        for (const auto& voxel : voxels_snapshot) {
-            auto* v = pb_cloud.add_voxels();
-            v->set_x(voxel.x);
-            v->set_y(voxel.y);
-            v->set_z(voxel.z);
-        }
-
-        const std::string out_path =
-            std::string("/home/weizh/data/voxel_cloud_") + std::to_string(pb_cloud.timestamp()) + ".pb";
-
-        std::ofstream ofs(out_path, std::ios::out | std::ios::binary | std::ios::trunc);
-        if (ofs.is_open()) {
-            pb_cloud.SerializeToOstream(&ofs);
-            ofs.close();
-        }
+    // generate protobuf
+    pb_cloud_.clear_voxels();
+    pb_cloud_.set_timestamp(static_cast<uint64_t>(lidarMsgTimestamp.nanoseconds()));
+    pb_cloud_.set_resolution(0.1f);
+    pb_cloud_.mutable_voxels()->Reserve(static_cast<int>(voxels_snapshot.size()));
+    for (const auto& voxel : voxels_snapshot) {
+        auto* v = pb_cloud_.add_voxels();
+        v->set_x(voxel.x);
+        v->set_y(voxel.y);
+        v->set_z(voxel.z);
     }
+
+    // publish protobuf bytes via MQTT
+    try {
+        pb_cloud_.SerializeToString(&mqtt_payload_buffer_);
+        if (!mqtt_payload_buffer_.empty()) {
+            RCLCPP_INFO(this->get_logger(), "Attempting MQTT Publish...");
+            mqtt_client_.publish("lidar/data", mqtt_payload_buffer_, 0, false);  // qos=0: do not wait for confirm, 1: at least once
+            RCLCPP_INFO(this->get_logger(), "MQTT Publish returned.");
+        }
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to send MQTT message: %s", e.what());
+    }
+
+    // debug, save protobuf to file, note if bag plays at rate < 1, it overwrites pb files
+    // const std::string out_path = std::string("/home/weizh/data/voxel_cloud_") + std::to_string(pb_cloud_.timestamp()) + ".pb";
+    // std::ofstream ofs(out_path, std::ios::out | std::ios::binary | std::ios::trunc);
+    // if (ofs.is_open()) {
+    //     pb_cloud_.SerializeToOstream(&ofs);
+    //     ofs.close();
+    // }
 }
 
 void LocalMap::publishResult() {

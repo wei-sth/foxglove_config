@@ -17,6 +17,8 @@
 #include <vector>
 #include <small_gicp/pcl/pcl_registration.hpp>
 #include <small_gicp/pcl/pcl_registration_impl.hpp>
+#include <mqtt/async_client.h>
+#include "obstacle.pb.h"
 
 
 // obstacle voxel, grass is not obstacle
@@ -31,7 +33,7 @@ struct Voxel {
 };
 
 
-class LocalMap : public ParamServer {
+class LocalMap : public ParamServer,  public virtual mqtt::callback {
 public:
     LocalMap(const rclcpp::NodeOptions & options);
     ~LocalMap();
@@ -159,6 +161,11 @@ private:
         // 91 - 96
         84.7, 85.64, 86.57, 87.52, 88.46, 89.4
     };
+
+    mqtt::async_client mqtt_client_;
+    mqtt::connect_options mqtt_conn_opts_;
+    foxglove_config::VoxelCloud pb_cloud_;
+    std::string mqtt_payload_buffer_;
 };
 
 #endif // LOCALMAP_NODE_H
