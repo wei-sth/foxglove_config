@@ -205,7 +205,8 @@ void LocalMap::slamProcessLoop() {
         // v0: current scan align to pre scan, use pre pose as initial guess, not good for long duration
         // performOdometer();
         // v1: current scan align to local map, only key frame is added to local map
-        performOdometer_v1();
+        // v2: current scan align to local map, only key frame is added to local map, use sliding window to drop old key frames
+        performOdometer_v2();
         auto t4 = std::chrono::steady_clock::now();
 
         // remove dynamic by range image
@@ -641,6 +642,7 @@ void LocalMap::performOdometer() {
 }
 
 void LocalMap::performOdometer_v1() {
+    // keep all key frames in local map
     static int cnt = 1;
     if (is_first_frame) {
         pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
@@ -679,7 +681,7 @@ void LocalMap::performOdometer_v1() {
         RCLCPP_ERROR(get_logger(), "VGICP align caught exception: %s", e.what());
     }
 
-    // 关键帧判断：位移超过0.3m或者旋转超过10度
+    // keyframe condition: translation exceeds 0.3 m or rotation exceeds 10 degrees
     float delta_dist = (current_pose.translation() - last_key_pose.translation()).norm();
     Eigen::Quaternionf q_curr(current_pose.linear());
     Eigen::Quaternionf q_last(last_key_pose.linear());
@@ -689,6 +691,115 @@ void LocalMap::performOdometer_v1() {
         pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
         pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
         *local_map += *cloud_world;
+
+        // source and target should have the same resolution for vgicp
+        local_map = small_gicp::voxelgrid_sampling(*local_map, 0.2);
+
+        if constexpr (LOCAL_DEBUG) {
+            // std::string output_pcd_path = "/home/weizh/data/local_map_" + std::to_string(cnt) + ".pcd";
+            // pcl::io::savePCDFileBinary(output_pcd_path, *local_map);
+            // ++cnt;
+        }
+
+        last_key_pose = current_pose;
+    }
+
+    PointTypePose thisPose6D;
+    Eigen::Matrix3f rot = current_pose.linear();
+    Eigen::Quaternionf q(rot);
+    thisPose6D.x = current_pose.translation().x();
+    thisPose6D.y = current_pose.translation().y();
+    thisPose6D.z = current_pose.translation().z();
+    thisPose6D.intensity = 0;  // index
+    Eigen::Matrix3f R = current_pose.rotation();
+    float roll  = atan2(R(2,1), R(2,2));
+    float pitch = atan2(-R(2,0), sqrt(R(2,1)*R(2,1) + R(2,2)*R(2,2)));
+    float yaw   = atan2(R(1,0), R(0,0));
+    thisPose6D.roll = roll;
+    thisPose6D.pitch = pitch;
+    thisPose6D.yaw = yaw;
+    thisPose6D.time = lidarMsgTimeValue;
+    // add pose to path for visualization
+    updatePath(thisPose6D);
+}
+
+void LocalMap::performOdometer_v2() {
+    // drop key frames in local map by sliding window
+    static int cnt = 1;
+    if (is_first_frame) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+        *local_map += *cloud_world;
+        last_key_pose = current_pose;
+        is_first_frame = false;
+        return;
+    }
+
+    if (laser_cloud_in_ds->empty() || local_map->empty()) return;
+
+    small_gicp::RegistrationPCL<PointType, PointType> vgicp;
+    vgicp.setRegistrationType("VGICP");
+    vgicp.setVoxelResolution(1.0);
+    vgicp.setNumThreads(4);
+    vgicp.setMaxCorrespondenceDistance(1.0);
+    vgicp.setNumNeighborsForCovariance(20);
+    vgicp.setMaximumIterations(100);
+
+    vgicp.setInputSource(laser_cloud_in_ds);
+    vgicp.setInputTarget(local_map);
+
+    // to be tested, consider the case when mower moves very fast and local map increases drastically within short time
+    // pcl::CropBox<PointType> crop;
+    // float range = 50.0f; 
+    // crop.setMin(Eigen::Vector4f(current_pose.translation().x() - range, current_pose.translation().y() - range, current_pose.translation().z() - range, 1.0));
+    // crop.setMax(Eigen::Vector4f(current_pose.translation().x() + range, current_pose.translation().y() + range, current_pose.translation().z() + range, 1.0));
+    // crop.setInputCloud(local_map);
+    // pcl::PointCloud<PointType>::Ptr cropped_map(new pcl::PointCloud<PointType>());
+    // crop.filter(*cropped_map);
+    // vgicp.setInputTarget(cropped_map);
+
+    pcl::PointCloud<PointType>::Ptr aligned_cloud(new pcl::PointCloud<PointType>());
+    
+    try {
+        // 使用当前位姿作为初始猜测进行配准
+        vgicp.align(*aligned_cloud, current_pose.matrix());
+
+        if (vgicp.hasConverged()) {
+            current_pose = vgicp.getFinalTransformation();
+        } else {
+            RCLCPP_WARN(get_logger(), "VGICP did not converge!");
+        }
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_logger(), "VGICP align caught exception: %s", e.what());
+    }
+
+    // keyframe condition: translation exceeds 0.3 m or rotation exceeds 10 degrees
+    float delta_dist = (current_pose.translation() - last_key_pose.translation()).norm();
+    Eigen::Quaternionf q_curr(current_pose.linear());
+    Eigen::Quaternionf q_last(last_key_pose.linear());
+    float delta_angle = q_last.angularDistance(q_curr) * 180.0 / M_PI;
+
+    if (delta_dist > 0.3 || delta_angle > 10.0) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+
+        KeyFrame kf;
+        kf.timestamp = lidarMsgTimeValue;
+        kf.pose = current_pose;
+        kf.cloud = cloud_world;
+        keyframe_queue.push_back(kf);
+
+        // drop frames 15 seconds ago
+        double current_time = lidarMsgTimeValue;
+        while (!keyframe_queue.empty() && (current_time - keyframe_queue.front().timestamp > 15.0)) {
+            keyframe_queue.pop_front();
+        }
+
+        // reconstruct local_map
+        local_map->clear();
+        for (const auto& frame : keyframe_queue) {
+            *local_map += *(frame.cloud);
+        }
 
         // source and target should have the same resolution for vgicp
         local_map = small_gicp::voxelgrid_sampling(*local_map, 0.2);

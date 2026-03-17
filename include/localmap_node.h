@@ -32,6 +32,12 @@ struct Voxel {
     bool is_dynamic;
 };
 
+struct KeyFrame {
+    double timestamp;
+    Eigen::Affine3f pose;
+    pcl::PointCloud<PointType>::Ptr cloud;  // cloud in odometry frame
+};
+
 
 class LocalMap : public ParamServer,  public virtual mqtt::callback {
 public:
@@ -87,6 +93,7 @@ private:
     void pointCloudPreprocessing();
     void performOdometer();
     void performOdometer_v1();
+    void performOdometer_v2();
     void updatePath(const PointTypePose& pose_in);
     void publishResult();
     void updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters, 
@@ -127,6 +134,7 @@ private:
     // --- Odometry and Mapping ---
     Eigen::Affine3f current_pose = Eigen::Affine3f::Identity();
     Eigen::Affine3f last_key_pose = Eigen::Affine3f::Identity();
+    std::deque<KeyFrame> keyframe_queue;
     pcl::PointCloud<PointType>::Ptr local_map;
     pcl::PointCloud<PointType>::Ptr last_laser_cloud_in;
     bool is_first_frame = true;
