@@ -17,6 +17,8 @@
 #include <vector>
 #include <small_gicp/pcl/pcl_registration.hpp>
 #include <small_gicp/pcl/pcl_registration_impl.hpp>
+#include <small_gicp/ann/gaussian_voxelmap.hpp>
+#include <small_gicp/points/point_cloud.hpp>
 #include <mqtt/async_client.h>
 #include "obstacle.pb.h"
 
@@ -36,6 +38,7 @@ struct KeyFrame {
     double timestamp;
     Eigen::Affine3f pose;
     pcl::PointCloud<PointType>::Ptr cloud;  // cloud in odometry frame
+    small_gicp::PointCloud::Ptr cloud_new;
 };
 
 
@@ -94,6 +97,8 @@ private:
     void performOdometer();
     void performOdometer_v1();
     void performOdometer_v2();
+    small_gicp::PointCloud::Ptr convertToSmallGICP(pcl::PointCloud<PointType>::Ptr pcl_cloud);
+    void performOdometer_v3();
     void updatePath(const PointTypePose& pose_in);
     void publishResult();
     void updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters, 
@@ -135,6 +140,8 @@ private:
     Eigen::Affine3f current_pose = Eigen::Affine3f::Identity();
     Eigen::Affine3f last_key_pose = Eigen::Affine3f::Identity();
     std::deque<KeyFrame> keyframe_queue;
+    std::shared_ptr<small_gicp::GaussianVoxelMap> voxel_target;
+    int num_threads = 4;  // OpenMP
     pcl::PointCloud<PointType>::Ptr local_map;
     pcl::PointCloud<PointType>::Ptr last_laser_cloud_in;
     bool is_first_frame = true;

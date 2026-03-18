@@ -20,6 +20,7 @@
 // without setting other params (num of threads ...), voxelgrid_sampling_omp seems slower than pcl::VoxelGrid
 // then I change voxelgrid_sampling_omp to voxelgrid_sampling, and set resolution of both source and target to 0.2m (previously source 0.2 and target 0.1), faster
 // todo: check https://github.com/koide3/small_gicp/blob/master/src/benchmark/odometry_benchmark_small_gicp_omp.cpp
+// must read: small_gicp/pcl/pcl_registration_impl.hpp
 
 // Dynamic objects can leave “ghost trails” in obstacle_voxel_map (clusters appear to grow), but an expanding cluster is not always dynamic—it can also be a long, static fence near the FOV boundary that looks longer as the mower moves.
 
@@ -206,7 +207,7 @@ void LocalMap::slamProcessLoop() {
         // performOdometer();
         // v1: current scan align to local map, only key frame is added to local map
         // v2: current scan align to local map, only key frame is added to local map, use sliding window to drop old key frames
-        performOdometer_v2();
+        performOdometer_v3();
         auto t4 = std::chrono::steady_clock::now();
 
         // remove dynamic by range image
@@ -829,6 +830,119 @@ void LocalMap::performOdometer_v2() {
     thisPose6D.yaw = yaw;
     thisPose6D.time = lidarMsgTimeValue;
     // add pose to path for visualization
+    updatePath(thisPose6D);
+}
+
+small_gicp::PointCloud::Ptr LocalMap::convertToSmallGICP(pcl::PointCloud<PointType>::Ptr pcl_cloud) {
+    auto out = std::make_shared<small_gicp::PointCloud>();
+    out->resize(pcl_cloud->size());
+    for (size_t i = 0; i < pcl_cloud->size(); ++i) {
+        const auto& pt = pcl_cloud->points[i];
+        out->point(i) << pt.x, pt.y, pt.z, 1.0;
+    }
+    return out;
+}
+
+void LocalMap::performOdometer_v3() {
+    if (laser_cloud_in_ds->empty()) return;
+
+    // --- 安全的 float->double 位姿转换，避免旋转矩阵非正交问题 ---
+    Eigen::Isometry3d T_curr = Eigen::Isometry3d::Identity();
+    T_curr.linear()      = current_pose.linear().cast<double>();
+    T_curr.translation() = current_pose.translation().cast<double>();
+
+    // --- source 转换 + 协方差估计 ---
+    // laser_cloud_in_ds 已经是 0.2m 下采样，直接用
+    auto source_cloud = convertToSmallGICP(laser_cloud_in_ds);
+    small_gicp::estimate_covariances_omp(*source_cloud, 20, num_threads);
+
+    // --- 第一帧：初始化 voxel_target ---
+    if (voxel_target == nullptr) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+
+        KeyFrame kf;
+        kf.timestamp  = lidarMsgTimeValue;
+        kf.cloud_new  = convertToSmallGICP(cloud_world);
+        // 世界系下估计协方差，insert 后体素协方差才有效
+        small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
+        keyframe_queue.push_back(kf);
+
+        voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
+        voxel_target->insert(*kf.cloud_new);
+
+        last_key_pose = current_pose;
+        return;
+    }
+
+    // --- 配准：Scan-to-Model ---
+    small_gicp::Registration<small_gicp::GICPFactor, small_gicp::ParallelReductionOMP> registration;
+    registration.reduction.num_threads  = num_threads;
+    registration.optimizer.max_iterations = 50;
+    // 草地场景收敛阈值可以稍松，避免迭代过多
+    registration.criteria.translation_eps = 1e-3;
+    registration.criteria.rotation_eps    = 1e-3;
+
+    auto result = registration.align(
+        *voxel_target,   // target: GaussianVoxelMap，traits::cov 返回体素协方差
+        *source_cloud,   // source: 带法向协方差的点云
+        *voxel_target,   // 近邻搜索结构复用 target
+        T_curr           // 初始猜测
+    );
+
+    if (result.converged) {
+        current_pose = result.T_target_source.cast<float>();
+    } else {
+        RCLCPP_WARN(get_logger(), "VGICP did not converge!");
+    }
+
+    // --- 关键帧判断 ---
+    float delta_dist  = (current_pose.translation() - last_key_pose.translation()).norm();
+    float delta_angle = Eigen::Quaternionf(last_key_pose.linear())
+                            .angularDistance(Eigen::Quaternionf(current_pose.linear()))
+                        * 180.0f / M_PI;
+
+    if (delta_dist > 0.3f || delta_angle > 10.0f) {
+        // 1. 当前帧转到世界系
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+
+        // 2. 入队
+        KeyFrame kf;
+        kf.timestamp = lidarMsgTimeValue;
+        kf.cloud_new = convertToSmallGICP(cloud_world);
+        // 关键：世界系下估计协方差，体素聚合后协方差才反映真实局部几何
+        small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
+        keyframe_queue.push_back(kf);
+
+        // 3. 滑窗剔除 15s 前的帧
+        while (!keyframe_queue.empty() &&
+               (lidarMsgTimeValue - keyframe_queue.front().timestamp > 15.0)) {
+            keyframe_queue.pop_front();
+        }
+
+        // 4. 重建 voxel_target
+        // GaussianVoxelMap 不支持删除，只能整体重建，但速度很快
+        voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
+        for (const auto& frame : keyframe_queue) {
+            voxel_target->insert(*frame.cloud_new);
+            // frame.cloud_new 已经在入队时估好协方差，直接 insert 即可
+        }
+
+        last_key_pose = current_pose;
+    }
+
+    // --- 位姿发布 ---
+    PointTypePose thisPose6D;
+    Eigen::Matrix3f R = current_pose.rotation();
+    thisPose6D.x         = current_pose.translation().x();
+    thisPose6D.y         = current_pose.translation().y();
+    thisPose6D.z         = current_pose.translation().z();
+    thisPose6D.intensity = 0;
+    thisPose6D.roll      = atan2(R(2,1), R(2,2));
+    thisPose6D.pitch     = atan2(-R(2,0), sqrt(R(2,1)*R(2,1) + R(2,2)*R(2,2)));
+    thisPose6D.yaw       = atan2(R(1,0), R(0,0));
+    thisPose6D.time      = lidarMsgTimeValue;
     updatePath(thisPose6D);
 }
 
