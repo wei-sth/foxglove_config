@@ -134,7 +134,7 @@ public:
     float imuRPYWeight;
 
     // ext
-    vector<double> lidarToGround;
+    vector<double> T_ground_lidar;
     vector<double> extRotV;
     vector<double> extRPYV;
     vector<double> extTransV;
@@ -288,8 +288,8 @@ public:
         declare_parameter<float>("imuRPYWeight", 0.01f);
         get_parameter("imuRPYWeight", imuRPYWeight);
 
-        declare_parameter<std::vector<double>>("lidarToGround", std::vector<double>(16, 0.0));
-        get_parameter("lidarToGround", lidarToGround);
+        declare_parameter<std::vector<double>>("T_ground_lidar", std::vector<double>(16, 0.0));
+        get_parameter("T_ground_lidar", T_ground_lidar);
         double ida[] = { 1.0,  0.0,  0.0,
                          0.0,  1.0,  0.0,
                          0.0,  0.0,  1.0};

@@ -29,7 +29,25 @@
 
 static constexpr bool LOCAL_DEBUG = true;
 
+static Eigen::Matrix4f vectorToMat4f(const std::vector<double>& v) {
+    Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
+    if (v.size() != 16) {
+        return m;
+    }
+    // YAML uses row-major [r11 r12 r13 tx r21 ...]
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            m(r, c) = static_cast<float>(v[r * 4 + c]);
+        }
+    }
+    return m;
+}
+
 LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap", options), mqtt_client_("tcp://127.0.0.1:1883", "obstacle_client_jetson") {
+    sensor_transform_ = Eigen::Affine3f(vectorToMat4f(T_ground_lidar));
+    // front-left-up to right-front-up
+    sensor_transform_.prerotate((Eigen::Matrix3f() << 0, -1, 0, 1, 0, 0, 0, 0, 1).finished());
+    sensor_inv_transform_ = sensor_transform_.inverse();
     mqtt_client_.set_callback(*this);
     mqtt_conn_opts_.set_user_name("zbtest");
     mqtt_conn_opts_.set_password("zbtest");
@@ -216,6 +234,20 @@ void LocalMap::slamProcessLoop() {
 
         updateObstacleVoxelMap(obstacle_clusters, current_pose, scan_end_time);
 
+        // slam thread generates snapshot, better than timer read slam work-in-progress variables.
+        PublishSnapshot snap;
+        snap.stamp = scan_end_time;
+        snap.T_odom_body = current_pose;
+        snap.voxels_snapshot.reserve(obstacle_voxel_map.size());
+        for (const auto& kv : obstacle_voxel_map) {
+            snap.voxels_snapshot.push_back(kv.second);
+        }
+        {
+            std::lock_guard<std::mutex> lk(mtx_latest_snapshot_);
+            latest_snapshot_ = std::move(snap);
+            has_latest_snapshot_ = true;
+        }
+
         if constexpr (LOCAL_DEBUG) {
             publishResult();
         }
@@ -234,7 +266,6 @@ void LocalMap::slamProcessLoop() {
 
 void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters,
     const Eigen::Affine3f& pose, double timestamp) {
-    std::lock_guard<std::mutex> lock(mtx_obstacle_map_);
     if (obstacle_clusters.empty()) {
         return;
     }
@@ -882,6 +913,7 @@ void LocalMap::performOdometer_v3() {
     // 草地场景收敛阈值可以稍松，避免迭代过多
     registration.criteria.translation_eps = 1e-3;
     registration.criteria.rotation_eps    = 1e-3;
+    // registration.rejector.max_dist_sq = 1.0; // not improved
 
     auto result = registration.align(
         *voxel_target,   // target: GaussianVoxelMap，traits::cov 返回体素协方差
@@ -965,50 +997,77 @@ void LocalMap::updatePath(const PointTypePose& pose_in) {
 }
 
 void LocalMap::publishObstacleMapTimerCb() {
+    // LOCAL_DEBUG=true: publish odom-frame voxel map, false: ground frame (based on body frame)
     if (lidarMsgTimestamp.nanoseconds() == 0) {
         return;
     }
 
-    // Make a snapshot copy to minimize lock hold time
-    std::vector<Voxel> voxels_snapshot;
+    PublishSnapshot snap;
     {
-        std::lock_guard<std::mutex> lock(mtx_obstacle_map_);
-        voxels_snapshot.reserve(obstacle_voxel_map.size());
-        for (const auto& kv : obstacle_voxel_map) {
-            voxels_snapshot.push_back(kv.second);
+        std::lock_guard<std::mutex> lk(mtx_latest_snapshot_);
+        if (!has_latest_snapshot_) {
+            // in case timer starts before slam produces the first snapshot.
+            return;
+        }
+        snap = latest_snapshot_;
+    }
+
+    const rclcpp::Time pb_stamp(static_cast<int64_t>(snap.stamp * 1e9));
+    const auto& voxels_snapshot = snap.voxels_snapshot;
+    pcl::PointCloud<pcl::PointXYZI>::Ptr voxel_cloud_out(new pcl::PointCloud<pcl::PointXYZI>());
+    voxel_cloud_out->reserve(voxels_snapshot.size());
+
+    std::string out_frame_id = odometryFrame;
+
+    if constexpr (!LOCAL_DEBUG) {
+        // Convert voxel centers (stored in odometry/world frame) to ground frame via body frame:
+        // p_body   = (T_odom_body)^{-1} * p_odom
+        // p_ground = sensor_transform_ * p_body   (sensor_transform_ : body -> ground)
+        const Eigen::Affine3f T_body_odom = snap.T_odom_body.inverse();
+        out_frame_id = groundFrame;
+
+        for (const auto& voxel : voxels_snapshot) {
+            Eigen::Vector3f p_odom(voxel.x, voxel.y, voxel.z);
+            Eigen::Vector3f p_body = T_body_odom * p_odom;
+            Eigen::Vector3f p_ground = sensor_transform_ * p_body;
+
+            pcl::PointXYZI pt;
+            pt.x = p_ground.x();
+            pt.y = p_ground.y();
+            pt.z = p_ground.z();
+            pt.intensity = std::min(255.0f, voxel.observation_count * 50.0f);
+            voxel_cloud_out->points.push_back(pt);
+        }
+    } else {
+        for (const auto& voxel : voxels_snapshot) {
+            pcl::PointXYZI pt;
+            pt.x = voxel.x;
+            pt.y = voxel.y;
+            pt.z = voxel.z;
+            pt.intensity = std::min(255.0f, voxel.observation_count * 50.0f);
+            voxel_cloud_out->points.push_back(pt);
         }
     }
-
-    pcl::PointCloud<pcl::PointXYZI>::Ptr voxel_cloud(new pcl::PointCloud<pcl::PointXYZI>());
-    voxel_cloud->reserve(voxels_snapshot.size());
-    for (const auto& voxel : voxels_snapshot) {
-        pcl::PointXYZI pt;
-        pt.x = voxel.x;
-        pt.y = voxel.y;
-        pt.z = voxel.z;
-        pt.intensity = std::min(255.0f, voxel.observation_count * 50.0f);
-        voxel_cloud->points.push_back(pt);
-    }
-    voxel_cloud->width = voxel_cloud->size();
-    voxel_cloud->height = 1;
-    voxel_cloud->is_dense = true;
+    voxel_cloud_out->width = voxel_cloud_out->size();
+    voxel_cloud_out->height = 1;
+    voxel_cloud_out->is_dense = true;
 
     sensor_msgs::msg::PointCloud2 cloud_msg;
-    pcl::toROSMsg(*voxel_cloud, cloud_msg);
-    cloud_msg.header.stamp = lidarMsgTimestamp;
-    cloud_msg.header.frame_id = odometryFrame;
+    pcl::toROSMsg(*voxel_cloud_out, cloud_msg);
+    cloud_msg.header.stamp = pb_stamp;
+    cloud_msg.header.frame_id = out_frame_id;
     pub_obstacle_map->publish(cloud_msg);
 
     // generate protobuf
     pb_cloud_.clear_voxels();
-    pb_cloud_.set_timestamp(static_cast<uint64_t>(lidarMsgTimestamp.nanoseconds()));
+    pb_cloud_.set_timestamp(static_cast<uint64_t>(pb_stamp.nanoseconds()));
     pb_cloud_.set_resolution(0.1f);
-    pb_cloud_.mutable_voxels()->Reserve(static_cast<int>(voxels_snapshot.size()));
-    for (const auto& voxel : voxels_snapshot) {
+    pb_cloud_.mutable_voxels()->Reserve(static_cast<int>(voxel_cloud_out->size()));
+    for (const auto& pt : voxel_cloud_out->points) {
         auto* v = pb_cloud_.add_voxels();
-        v->set_x(voxel.x);
-        v->set_y(voxel.y);
-        v->set_z(voxel.z);
+        v->set_x(pt.x);
+        v->set_y(pt.y);
+        v->set_z(pt.z);
     }
 
     // publish protobuf bytes via MQTT

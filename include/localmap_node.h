@@ -34,6 +34,12 @@ struct Voxel {
     bool is_dynamic;
 };
 
+struct PublishSnapshot {
+    double stamp = 0.0;  // seconds, scan_end_time
+    Eigen::Affine3f T_odom_body = Eigen::Affine3f::Identity();
+    std::vector<Voxel> voxels_snapshot;  // voxel centers stored in odom frame
+};
+
 struct KeyFrame {
     double timestamp;
     Eigen::Affine3f pose;
@@ -69,7 +75,9 @@ private:
     // --- Timers (independent publishers) ---
     rclcpp::TimerBase::SharedPtr timer_pub_obstacles_;
     void publishObstacleMapTimerCb();
-    std::mutex mtx_obstacle_map_;
+    std::mutex mtx_latest_snapshot_;
+    PublishSnapshot latest_snapshot_;
+    bool has_latest_snapshot_ = false; // become true when first scan registered
 
     // --- Data Buffers ---
     struct LidarData {
@@ -113,6 +121,11 @@ private:
     void findPosition(double relTime, float *posXCur, float *posYCur, float *posZCur);
     void deskewPoint(PointType *point, double relTime);
     PointType lidarToImu(const PointType& p);
+
+    // lidar frame -> ground frame
+    Eigen::Affine3f sensor_transform_ = Eigen::Affine3f::Identity();
+    // ground frame -> lidar frame
+    Eigen::Affine3f sensor_inv_transform_ = Eigen::Affine3f::Identity();
 
     // --- Data for processing ---
     sensor_msgs::msg::PointCloud2::SharedPtr current_lidar_msg;

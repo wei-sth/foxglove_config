@@ -42,8 +42,8 @@
     imuGravity: 9.80511
     imuRPYWeight: 0.01                          # default: 0.01, only used when imuType == 1
 
-    # lidar to ground (row major), only keep rotation, the last row and col must be 0,0,0,1
-    lidarToGround: [0.883228, -0.0186038, 0.468574, 0.0,
+    # used to convert from lidar frame to ground frame (row major), only keep rotation, the last row and col must be 0,0,0,1. Need to transform from front-left-up to right-front-up in code later.
+    T_ground_lidar: [0.883228, -0.0186038, 0.468574, 0.0,
                     0.0, 0.999213, 0.0396717, 0.0,
                     -0.468943, -0.0350392, 0.882533, 0.0,
                     0.0, 0.0, 0.0, 1.0]
