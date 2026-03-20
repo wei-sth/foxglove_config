@@ -68,12 +68,8 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
         RCLCPP_ERROR(this->get_logger(), "MQTT Connection failed: %s", exc.what());
     }
 
-    sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic,
-        rclcpp::QoS(rclcpp::KeepLast(10000)).reliable(),
-        std::bind(&LocalMap::imuHandler, this, std::placeholders::_1));
-    sub_lidar = create_subscription<sensor_msgs::msg::PointCloud2>(pointCloudTopic,
-        rclcpp::QoS(rclcpp::KeepLast(10000)).reliable(),
-        std::bind(&LocalMap::lidarHandler, this, std::placeholders::_1));
+    sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic, rclcpp::QoS(100).best_effort(), std::bind(&LocalMap::imuHandler, this, std::placeholders::_1));
+    sub_lidar = create_subscription<sensor_msgs::msg::PointCloud2>(pointCloudTopic, rclcpp::QoS(2).best_effort(), std::bind(&LocalMap::lidarHandler, this, std::placeholders::_1));
 
     RCLCPP_INFO(get_logger(), "Subscribed to IMU topic: %s", imuTopic.c_str());
     RCLCPP_INFO(get_logger(), "Subscribed to Lidar topic: %s", pointCloudTopic.c_str());
