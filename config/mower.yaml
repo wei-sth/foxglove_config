@@ -50,10 +50,15 @@
                     0.0, 0.0, 0.0, 1.0]
     
     # lidar wrt imu, used to convert lidar to imu frame
-    T_imu_lidar_t: [0.0, 0.0, 0.0]
-    T_imu_lidar_R: [1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0]
+    # T_imu_lidar_t: [0.0, 0.0, 0.0]
+    # T_imu_lidar_R: [1.0, 0.0, 0.0,
+    #                 0.0, 1.0, 0.0,
+    #                 0.0, 0.0, 1.0]
+    
+    T_imu_lidar_t: [0.004250, 0.004180, -0.004460]
+    T_imu_lidar_R: [0.000280, -0.999993, 0.003629,
+                   -0.999946, -0.000242, 0.010384,
+                   -0.010384, -0.003632, -0.999939]
 
     # This parameter is set only when the 9-axis IMU is used, but it must be a high-precision IMU. e.g. MTI-680
     extrinsicRPY: [0.0, -1.0, 0.0,

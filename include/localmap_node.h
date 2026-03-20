@@ -110,6 +110,8 @@ private:
     void performOdometer_v2();
     small_gicp::PointCloud::Ptr convertToSmallGICP(pcl::PointCloud<PointType>::Ptr pcl_cloud);
     void performOdometer_v3();
+    // Use IMU integrated delta (scan_end_time vs previous scan_end_time) to predict pose for registration initial guess
+    Eigen::Isometry3d makeImuInitialGuessIsometry_(const Eigen::Isometry3d& T_last, double t_last, double t_curr) const;
     PointTypePose poseToPose6D(const Eigen::Affine3f& pose) const;
     void updatePath(const PointTypePose& pose_in);
     void publishResult();
@@ -131,6 +133,8 @@ private:
     Eigen::Affine3f T_ego_body = Eigen::Affine3f::Identity();
     Eigen::Affine3f T_lidar_imu = Eigen::Affine3f::Identity();
     Eigen::Affine3f T_imu_lidar = Eigen::Affine3f::Identity();
+    Eigen::Matrix3f extRot_f_ = Eigen::Matrix3f::Identity();  // lidar -> imu, double reading from yaml, try float might be OK enough
+    Eigen::Vector3f extTrans_f_ = Eigen::Vector3f::Zero();
 
     // --- Data for processing ---
     sensor_msgs::msg::PointCloud2::SharedPtr current_lidar_msg;
@@ -151,6 +155,10 @@ private:
 
     bool first_imu_flag = true;
     Eigen::Quaterniond q_main;
+
+    // --- IMU-based initial guess (slam thread only, no lock needed) ---
+    double last_imu_guess_time_ = -1.0;     // seconds, last lidar scan_end_time used for prediction
+    Eigen::Quaterniond q_imu_guess_ = Eigen::Quaterniond::Identity();  // accumulated orientation (relative)
 
     // --- Odometry and Mapping ---
     Eigen::Affine3f current_pose = Eigen::Affine3f::Identity();

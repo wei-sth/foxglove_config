@@ -28,6 +28,8 @@
 // todo: 应该针对local map中的所有obstacle划定一个ROI，对这个ROI中的做ray casting，看看是否可行，找到落到这个ROI中的最后一帧lidar的障碍物
 // 在查询 range_image[u][v] 时，不要只查一个像素，可以查周围 3x3 的邻域，取最小值或者进行某种插值，防止因为雷达光束打偏了而误删障碍物。
 
+// true:  vis_type_ = VisResultType::JSON_AND_VOXELL, output frame (obstacle + registered cloud + path): odom
+// false: vis_type_ = VisResultType::JSON_AND_VOXELE, output frame (obstacle): ego
 static constexpr bool LOCAL_DEBUG = true;
 
 static Eigen::Matrix4f vectorToMat4f(const std::vector<double>& v) {
@@ -45,6 +47,9 @@ static Eigen::Matrix4f vectorToMat4f(const std::vector<double>& v) {
 }
 
 LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap", options), mqtt_client_("tcp://127.0.0.1:1883", "obstacle_client_jetson") {
+    // Cache extrinsics in float for fast per-point transforms
+    extRot_f_ = extRot.cast<float>();
+    extTrans_f_ = extTrans.cast<float>();
     T_ego_lidar = Eigen::Affine3f(vectorToMat4f(T_ground_lidar));
     // front-left-up to right-front-up
     T_ego_lidar.prerotate((Eigen::Matrix3f() << 0, -1, 0, 1, 0, 0, 0, 0, 1).finished());
@@ -273,8 +278,6 @@ void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::Poi
     }
     
     float resolution = 0.1f;
-    
-    // 1. 体素化并转换到世界坐标系
     std::map<std::tuple<int, int, int>, Voxel> new_voxels;
     
     #pragma omp parallel for
@@ -282,11 +285,19 @@ void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::Poi
         const auto& cluster = obstacle_clusters[i];
         std::map<std::tuple<int, int, int>, Voxel> local_voxels;
         
+        const Eigen::Matrix3f R_ob = pose.linear();
+        const Eigen::Vector3f t_ob = pose.translation();
+
+        // odom<-body<-lidar
+        const Eigen::Matrix3f R_ol = R_ob * extRot_f_;
+        const Eigen::Vector3f t_ol = R_ob * extTrans_f_ + t_ob;
+
         for (const auto& pt : cluster->points) {
-            // 转换到世界坐标系
-            Eigen::Vector3f pt_local(pt.x, pt.y, pt.z);
-            Eigen::Vector3f pt_world = pose * pt_local;
-            
+            // detector output clusters are in LIDAR frame (see obstacle_detector.cpp: transformed back by sensor_inv_transform_)
+            // Fast path: p_odom = R_ol * p_lidar + t_ol
+            const Eigen::Vector3f p_lidar(pt.x, pt.y, pt.z);
+            const Eigen::Vector3f pt_world = R_ol * p_lidar + t_ol;
+
             // 计算体素坐标
             int ix = std::floor(pt_world.x() / resolution);
             int iy = std::floor(pt_world.y() / resolution);
@@ -614,6 +625,78 @@ PointType LocalMap::lidarToImu(const PointType& p) {
     return dst;
 }
 
+Eigen::Isometry3d LocalMap::makeImuInitialGuessIsometry_(const Eigen::Isometry3d& T_last, double t_last, double t_curr) const {
+    // slam thread only
+    if (imu_que_opt.empty()) {
+        return T_last;
+    }
+
+    if (t_last <= 0.0 || t_curr <= 0.0 || t_curr <= t_last) {
+        return T_last;
+    }
+
+    // integrate gyro (rad/s) from (t_last, t_curr] using imu_que_opt
+    // Note: sensor_msgs/Imu angular_velocity is in IMU frame.
+    Eigen::Quaterniond q_delta = Eigen::Quaterniond::Identity();
+
+    // find first imu with stamp > t_last
+    size_t idx = 0;
+    while (idx < imu_que_opt.size() && rclcpp::Time(imu_que_opt[idx].header.stamp).seconds() <= t_last) {
+        ++idx;
+    }
+
+    double t_prev = t_last;
+
+    for (; idx < imu_que_opt.size(); ++idx) {
+        const auto& imu_msg = imu_que_opt[idx];
+        const double t = rclcpp::Time(imu_msg.header.stamp).seconds();
+        if (t > t_curr) {
+            break;
+        }
+
+        const double dt = t - t_prev;
+        if (dt <= 0.0) {
+            t_prev = t;
+            continue;
+        }
+
+        const Eigen::Vector3d w(imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z);
+        const Eigen::Vector3d dtheta = w * dt;
+        const double angle = dtheta.norm();
+        if (angle > 1e-12) {
+            const Eigen::Vector3d axis = dtheta / angle;
+            const Eigen::AngleAxisd aa(angle, axis);
+            q_delta = q_delta * Eigen::Quaterniond(aa);
+        }
+
+        t_prev = t;
+    }
+
+    // if last imu < t_curr, extend with last gyro
+    if (t_prev < t_curr && idx > 0) {
+        const auto& imu_last = imu_que_opt[std::min(idx, imu_que_opt.size() - 1)];
+        const double dt = t_curr - t_prev;
+        if (dt > 0.0) {
+            const Eigen::Vector3d w(imu_last.angular_velocity.x, imu_last.angular_velocity.y, imu_last.angular_velocity.z);
+            const Eigen::Vector3d dtheta = w * dt;
+            const double angle = dtheta.norm();
+            if (angle > 1e-12) {
+                const Eigen::Vector3d axis = dtheta / angle;
+                const Eigen::AngleAxisd aa(angle, axis);
+                q_delta = q_delta * Eigen::Quaterniond(aa);
+            }
+        }
+    }
+
+    // Apply delta in odom frame: R_pred = R_last * R_delta_imu_as_body
+    // Here we assume IMU orientation is approximately aligned with body/odom rotation axes
+    // (extrinsics can be applied if needed later).
+    Eigen::Isometry3d T_pred = T_last;
+    T_pred.linear() = (T_last.linear() * q_delta.toRotationMatrix());
+
+    return T_pred;
+}
+
 void LocalMap::pointCloudPreprocessing() {
     if (deskewByImu) {
         for (int i = 0; i < (int)laser_cloud_in->size(); ++i) {
@@ -861,10 +944,18 @@ PointTypePose LocalMap::poseToPose6D(const Eigen::Affine3f& pose) const {
 void LocalMap::performOdometer_v3() {
     if (laser_cloud_in_ds->empty()) return;
 
-    // --- 安全的 float->double 位姿转换，避免旋转矩阵非正交问题 ---
-    Eigen::Isometry3d T_curr = Eigen::Isometry3d::Identity();
-    T_curr.linear()      = current_pose.linear().cast<double>();
-    T_curr.translation() = current_pose.translation().cast<double>();
+    // --- last pose (float->double) ---
+    Eigen::Isometry3d T_last = Eigen::Isometry3d::Identity();
+    T_last.linear()      = current_pose.linear().cast<double>();
+    T_last.translation() = current_pose.translation().cast<double>();
+
+    // --- IMU initial guess (rotation prediction) ---
+    // Use scan_end_time as pose timestamp proxy; keep translation unchanged.
+    Eigen::Isometry3d T_curr = T_last;
+    if (last_imu_guess_time_ > 0.0) {
+        T_curr = makeImuInitialGuessIsometry_(T_last, last_imu_guess_time_, scan_end_time);
+    }
+    last_imu_guess_time_ = scan_end_time;
 
     // --- source 转换 + 协方差估计 ---
     // laser_cloud_in_ds 已经是 0.2m 下采样，直接用
