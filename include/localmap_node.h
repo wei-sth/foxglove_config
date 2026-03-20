@@ -58,6 +58,7 @@ public:
     // debug, save slamProcessLoop total time on exit
     void recordSlamLoopTotalMs_(double total_ms);
     void dumpSlamLoopTotalCsv_(const std::string& out_path);
+    void dumpGlobalPathCsvQuat_(const std::string& out_path);
     std::mutex mtx_timing_;
     std::vector<double> slam_total_ms_;
 private:
@@ -81,11 +82,13 @@ private:
 
     // --- Data Buffers ---
     struct LidarData {
-        double lidar_frame_beg_time;
+        rclcpp::Time stamp;  // lidar message header.stamp
+        double lidar_frame_beg_time;  // from lidar message header.stamp
         double lidar_frame_end_time;
         pcl::PointCloud<PointType>::Ptr cloud;
         pcl::PointCloud<RSPointDefault>::Ptr cloud_raw; // temp solution, Wei
     };
+    LidarData current_lidar_data_;  // slam thread only: this is the frame being processed (NOT aligned)
     std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_buffer;
     std::deque<LidarData> lidar_buffer;
     std::mutex mtx_buffer;
@@ -107,6 +110,7 @@ private:
     void performOdometer_v2();
     small_gicp::PointCloud::Ptr convertToSmallGICP(pcl::PointCloud<PointType>::Ptr pcl_cloud);
     void performOdometer_v3();
+    PointTypePose poseToPose6D(const Eigen::Affine3f& pose) const;
     void updatePath(const PointTypePose& pose_in);
     void publishResult();
     void updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters, 
@@ -138,8 +142,6 @@ private:
     double scan_beg_time;
     double scan_end_time;
     double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0, last_timestamp_img = -1.0;
-    rclcpp::Time lidarMsgTimestamp;
-    double lidarMsgTimeValue;
 
     float imu_rot_x[2000];
     float imu_rot_y[2000];
@@ -160,6 +162,7 @@ private:
     pcl::PointCloud<PointType>::Ptr last_laser_cloud_in;
     bool is_first_frame = true;
     nav_msgs::msg::Path globalPath;
+    mutable std::mutex mtx_path_;
 
     VisResultType vis_type_;
     std::unique_ptr<RangeImageObstacleDetector> detector_;

@@ -7,6 +7,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
 
 // robosense airy frame_id: rslidar
 // bbox is not suitable for indoor, I tried to use nav2_msgs/msg/VoxelGrid, but rviz cannot show
@@ -143,14 +144,13 @@ void LocalMap::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg) {
 // we should based on the pose optimized by last lidar align, calculate relative movement from imu
 
 void LocalMap::lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-    lidarMsgTimestamp = msg->header.stamp;
-    lidarMsgTimeValue = rclcpp::Time(msg->header.stamp).seconds();
     pcl::PointCloud<RSPointDefault> tmp_rs_cloud;
     pcl::fromROSMsg(*msg, tmp_rs_cloud);
 
     // robosense point time is relative time(unit: ns), msg header timestamp is scan start time
     LidarData data;
-    data.lidar_frame_beg_time = lidarMsgTimeValue;
+    data.stamp = rclcpp::Time(msg->header.stamp);
+    data.lidar_frame_beg_time = data.stamp.seconds();
     data.lidar_frame_end_time = data.lidar_frame_beg_time + 0.1;  // 10Hz
     data.cloud.reset(new pcl::PointCloud<PointType>());
     data.cloud->reserve(tmp_rs_cloud.size());
@@ -190,6 +190,7 @@ void LocalMap::slamProcessLoop() {
 
         current_lidar_data = lidar_buffer.front();
         lidar_buffer.pop_front();
+        current_lidar_data_ = current_lidar_data;
         scan_beg_time = current_lidar_data.lidar_frame_beg_time;
         scan_end_time = current_lidar_data.lidar_frame_end_time;
 
@@ -741,23 +742,7 @@ void LocalMap::performOdometer_v1() {
         last_key_pose = current_pose;
     }
 
-    PointTypePose thisPose6D;
-    Eigen::Matrix3f rot = current_pose.linear();
-    Eigen::Quaternionf q(rot);
-    thisPose6D.x = current_pose.translation().x();
-    thisPose6D.y = current_pose.translation().y();
-    thisPose6D.z = current_pose.translation().z();
-    thisPose6D.intensity = 0;  // index
-    Eigen::Matrix3f R = current_pose.rotation();
-    float roll  = atan2(R(2,1), R(2,2));
-    float pitch = atan2(-R(2,0), sqrt(R(2,1)*R(2,1) + R(2,2)*R(2,2)));
-    float yaw   = atan2(R(1,0), R(0,0));
-    thisPose6D.roll = roll;
-    thisPose6D.pitch = pitch;
-    thisPose6D.yaw = yaw;
-    thisPose6D.time = lidarMsgTimeValue;
-    // add pose to path for visualization
-    updatePath(thisPose6D);
+    updatePath(poseToPose6D(current_pose));
 }
 
 void LocalMap::performOdometer_v2() {
@@ -821,13 +806,13 @@ void LocalMap::performOdometer_v2() {
         pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
 
         KeyFrame kf;
-        kf.timestamp = lidarMsgTimeValue;
+        kf.timestamp = current_lidar_data_.lidar_frame_beg_time;
         kf.pose = current_pose;
         kf.cloud = cloud_world;
         keyframe_queue.push_back(kf);
 
         // drop frames 15 seconds ago
-        double current_time = lidarMsgTimeValue;
+        const double current_time = current_lidar_data_.lidar_frame_beg_time;
         while (!keyframe_queue.empty() && (current_time - keyframe_queue.front().timestamp > 15.0)) {
             keyframe_queue.pop_front();
         }
@@ -850,23 +835,7 @@ void LocalMap::performOdometer_v2() {
         last_key_pose = current_pose;
     }
 
-    PointTypePose thisPose6D;
-    Eigen::Matrix3f rot = current_pose.linear();
-    Eigen::Quaternionf q(rot);
-    thisPose6D.x = current_pose.translation().x();
-    thisPose6D.y = current_pose.translation().y();
-    thisPose6D.z = current_pose.translation().z();
-    thisPose6D.intensity = 0;  // index
-    Eigen::Matrix3f R = current_pose.rotation();
-    float roll  = atan2(R(2,1), R(2,2));
-    float pitch = atan2(-R(2,0), sqrt(R(2,1)*R(2,1) + R(2,2)*R(2,2)));
-    float yaw   = atan2(R(1,0), R(0,0));
-    thisPose6D.roll = roll;
-    thisPose6D.pitch = pitch;
-    thisPose6D.yaw = yaw;
-    thisPose6D.time = lidarMsgTimeValue;
-    // add pose to path for visualization
-    updatePath(thisPose6D);
+    updatePath(poseToPose6D(current_pose));
 }
 
 small_gicp::PointCloud::Ptr LocalMap::convertToSmallGICP(pcl::PointCloud<PointType>::Ptr pcl_cloud) {
@@ -877,6 +846,20 @@ small_gicp::PointCloud::Ptr LocalMap::convertToSmallGICP(pcl::PointCloud<PointTy
         out->point(i) << pt.x, pt.y, pt.z, 1.0;
     }
     return out;
+}
+
+PointTypePose LocalMap::poseToPose6D(const Eigen::Affine3f& pose) const {
+    PointTypePose p;
+    const Eigen::Matrix3f R = pose.rotation();
+    p.x = pose.translation().x();
+    p.y = pose.translation().y();
+    p.z = pose.translation().z();
+    p.intensity = 0;
+    p.roll = atan2(R(2, 1), R(2, 2));
+    p.pitch = atan2(-R(2, 0), sqrt(R(2, 1) * R(2, 1) + R(2, 2) * R(2, 2)));
+    p.yaw = atan2(R(1, 0), R(0, 0));
+    p.time = scan_beg_time;
+    return p;
 }
 
 void LocalMap::performOdometer_v3() {
@@ -898,16 +881,15 @@ void LocalMap::performOdometer_v3() {
         pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
 
         KeyFrame kf;
-        kf.timestamp  = lidarMsgTimeValue;
+        kf.timestamp = scan_beg_time;
         kf.cloud_new  = convertToSmallGICP(cloud_world);
         // 世界系下估计协方差，insert 后体素协方差才有效
         small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
         keyframe_queue.push_back(kf);
-
         voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
         voxel_target->insert(*kf.cloud_new);
-
         last_key_pose = current_pose;
+        updatePath(poseToPose6D(current_pose));
         return;
     }
 
@@ -946,7 +928,7 @@ void LocalMap::performOdometer_v3() {
 
         // 2. 入队
         KeyFrame kf;
-        kf.timestamp = lidarMsgTimeValue;
+        kf.timestamp = scan_beg_time;
         kf.cloud_new = convertToSmallGICP(cloud_world);
         // 关键：世界系下估计协方差，体素聚合后协方差才反映真实局部几何
         small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
@@ -954,7 +936,7 @@ void LocalMap::performOdometer_v3() {
 
         // 3. 滑窗剔除 15s 前的帧
         while (!keyframe_queue.empty() &&
-               (lidarMsgTimeValue - keyframe_queue.front().timestamp > 15.0)) {
+               (scan_beg_time - keyframe_queue.front().timestamp > 15.0)) {
             keyframe_queue.pop_front();
         }
 
@@ -969,24 +951,12 @@ void LocalMap::performOdometer_v3() {
         last_key_pose = current_pose;
     }
 
-    // --- 位姿发布 ---
-    PointTypePose thisPose6D;
-    Eigen::Matrix3f R = current_pose.rotation();
-    thisPose6D.x         = current_pose.translation().x();
-    thisPose6D.y         = current_pose.translation().y();
-    thisPose6D.z         = current_pose.translation().z();
-    thisPose6D.intensity = 0;
-    thisPose6D.roll      = atan2(R(2,1), R(2,2));
-    thisPose6D.pitch     = atan2(-R(2,0), sqrt(R(2,1)*R(2,1) + R(2,2)*R(2,2)));
-    thisPose6D.yaw       = atan2(R(1,0), R(0,0));
-    thisPose6D.time      = lidarMsgTimeValue;
-    updatePath(thisPose6D);
+    updatePath(poseToPose6D(current_pose));
 }
 
 void LocalMap::updatePath(const PointTypePose& pose_in) {
     geometry_msgs::msg::PoseStamped pose_stamped;
-    rclcpp::Time t(static_cast<uint32_t>(pose_in.time * 1e9));
-    pose_stamped.header.stamp = t;
+    pose_stamped.header.stamp = current_lidar_data_.stamp;
     pose_stamped.header.frame_id = odometryFrame;
     pose_stamped.pose.position.x = pose_in.x;
     pose_stamped.pose.position.y = pose_in.y;
@@ -998,14 +968,13 @@ void LocalMap::updatePath(const PointTypePose& pose_in) {
     pose_stamped.pose.orientation.z = q.z();
     pose_stamped.pose.orientation.w = q.w();
 
+    std::lock_guard<std::mutex> lk(mtx_path_);
     globalPath.poses.push_back(pose_stamped);
 }
 
 void LocalMap::publishObstacleMapTimerCb() {
     // LOCAL_DEBUG=true: publish odom-frame voxel map, false: ego frame
-    if (lidarMsgTimestamp.nanoseconds() == 0) {
-        return;
-    }
+    if (!has_latest_snapshot_) return;
 
     PublishSnapshot snap;
     {
@@ -1095,7 +1064,7 @@ void LocalMap::publishResult() {
     // publish odom, path, registered cloud; obstacle_voxel_map is published by timer (see publishObstacleMapTimerCb)
     // only called in debug, since release requires specific data format (data consumer not ros based)
     nav_msgs::msg::Odometry odom;
-    odom.header.stamp = lidarMsgTimestamp;
+    odom.header.stamp = current_lidar_data_.stamp;
     odom.header.frame_id = odometryFrame;
     odom.child_frame_id = bodyFrame;
 
@@ -1112,17 +1081,17 @@ void LocalMap::publishResult() {
 
     // publish path
     if (pub_path->get_subscription_count() != 0) {
-        globalPath.header.stamp = lidarMsgTimestamp;
+        globalPath.header.stamp = current_lidar_data_.stamp;
         globalPath.header.frame_id = odometryFrame;
         pub_path->publish(globalPath);
     }
 
     pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
     pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
-    publishCloud(pub_cloud_registered, cloud_world, lidarMsgTimestamp, odometryFrame);
+    publishCloud(pub_cloud_registered, cloud_world, current_lidar_data_.stamp, odometryFrame);
 
     if (pub_local_map->get_subscription_count() != 0) {
-        publishCloud(pub_local_map, local_map, lidarMsgTimestamp, odometryFrame);
+        publishCloud(pub_local_map, local_map, current_lidar_data_.stamp, odometryFrame);
     }
 }
 
@@ -1271,6 +1240,38 @@ void LocalMap::dumpSlamLoopTotalCsv_(const std::string& out_path) {
     RCLCPP_INFO(get_logger(), "Saved slam total(ms) csv: %s (rows=%zu)", out_path.c_str(), snapshot.size());
 }
 
+void LocalMap::dumpGlobalPathCsvQuat_(const std::string& out_path) {
+    nav_msgs::msg::Path snapshot;
+    {
+        std::lock_guard<std::mutex> lk(mtx_path_);
+        snapshot = globalPath;
+    }
+
+    std::ofstream ofs(out_path, std::ios::out | std::ios::trunc);
+    if (!ofs.is_open()) {
+        RCLCPP_ERROR(get_logger(), "Failed to open globalPath(quat) csv output: %s", out_path.c_str());
+        return;
+    }
+
+    ofs << "timestamp,x,y,z,qx,qy,qz,qw\n";
+    ofs << std::fixed << std::setprecision(9);
+
+    for (const auto& ps : snapshot.poses) {
+        const double t = rclcpp::Time(ps.header.stamp).seconds();
+        ofs << t << ","
+            << ps.pose.position.x << ","
+            << ps.pose.position.y << ","
+            << ps.pose.position.z << ","
+            << ps.pose.orientation.x << ","
+            << ps.pose.orientation.y << ","
+            << ps.pose.orientation.z << ","
+            << ps.pose.orientation.w << "\n";
+    }
+    ofs.close();
+
+    RCLCPP_INFO(get_logger(), "Saved globalPath(quat) csv: %s (rows=%zu)", out_path.c_str(), snapshot.poses.size());
+}
+
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
   
@@ -1282,16 +1283,17 @@ int main(int argc, char** argv) {
 
     rclcpp::spin(node);
 
-    // Save once right before exit.
+    // Save once right before exit (Ctrl+C).
     {
         std::time_t now = std::time(nullptr);
         std::tm tm_local{};
         localtime_r(&now, &tm_local);
-        std::ostringstream oss;
-        oss << "/home/weizh/data/slam_total_"
-            << std::put_time(&tm_local, "%Y%m%d_%H%M%S")
-            << ".csv";
-        node->dumpSlamLoopTotalCsv_(oss.str());
+        std::ostringstream ts;
+        ts << std::put_time(&tm_local, "%Y%m%d_%H%M%S");
+        const std::string suffix = ts.str();
+
+        node->dumpSlamLoopTotalCsv_(std::string("/home/weizh/data/slam_total_") + suffix + ".csv");
+        node->dumpGlobalPathCsvQuat_(std::string("/home/weizh/data/global_path_") + suffix + ".csv");
     }
 
     rclcpp::shutdown();
