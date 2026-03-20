@@ -9,6 +9,7 @@
     bodyFrame: "imu_link"                   # lidar points are converted to imu
     odometryFrame: "odom"
     mapFrame: "map"
+    egoFrame: "ego"                   # T_ground_lidar, then front-left-up to right-front-up
     
     # Export settings
     savePCD: true                              # https://github.com/TixiaoShan/LIO-SAM/issues/3
@@ -49,10 +50,10 @@
                     0.0, 0.0, 0.0, 1.0]
     
     # lidar wrt imu, used to convert lidar to imu frame
-    extrinsicTrans: [0.0, 0.0, 0.0]
-    extrinsicRot: [1.0, 0.0, 0.0,
-                   0.0, 1.0, 0.0,
-                   0.0, 0.0, 1.0]
+    T_imu_lidar_t: [0.0, 0.0, 0.0]
+    T_imu_lidar_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
 
     # This parameter is set only when the 9-axis IMU is used, but it must be a high-precision IMU. e.g. MTI-680
     extrinsicRPY: [0.0, -1.0, 0.0,

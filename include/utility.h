@@ -101,6 +101,7 @@ public:
     string bodyFrame;
     string odometryFrame;
     string mapFrame;
+    string egoFrame;
 
     // Save pcd
     bool savePCD;
@@ -135,9 +136,9 @@ public:
 
     // ext
     vector<double> T_ground_lidar;
-    vector<double> extRotV;
+    vector<double> T_imu_lidar_R;
     vector<double> extRPYV;
-    vector<double> extTransV;
+    vector<double> T_imu_lidar_t;
     Eigen::Matrix3d extRot;
     Eigen::Matrix3d extRPY;
     Eigen::Vector3d extTrans;
@@ -210,6 +211,8 @@ public:
         get_parameter("odometryFrame", odometryFrame);
         declare_parameter<string>("mapFrame", "map");
         get_parameter("mapFrame", mapFrame);
+        declare_parameter<string>("egoFrame", "ego");
+        get_parameter("egoFrame", egoFrame);
 
         declare_parameter<bool>("savePCD", false);
         get_parameter("savePCD", savePCD);
@@ -294,18 +297,18 @@ public:
                          0.0,  1.0,  0.0,
                          0.0,  0.0,  1.0};
         std::vector < double > id(ida, std::end(ida));
-        declare_parameter("extrinsicRot", id);
-        get_parameter("extrinsicRot", extRotV);
+        declare_parameter("T_imu_lidar_R", id);
+        get_parameter("T_imu_lidar_R", T_imu_lidar_R);
         declare_parameter("extrinsicRPY", id);
         get_parameter("extrinsicRPY", extRPYV);
         double zea[] = {0.0, 0.0, 0.0};
         std::vector < double > ze(zea, std::end(zea));
-        declare_parameter("extrinsicTrans", ze);
-        get_parameter("extrinsicTrans", extTransV);
+        declare_parameter("T_imu_lidar_t", ze);
+        get_parameter("T_imu_lidar_t", T_imu_lidar_t);
 
-        extRot = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extRotV.data(), 3, 3);
+        extRot = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_imu_lidar_R.data(), 3, 3);
         extRPY = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extRPYV.data(), 3, 3);
-        extTrans = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extTransV.data(), 3, 1);
+        extTrans = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_imu_lidar_t.data(), 3, 1);
         extQRPY = Eigen::Quaterniond(extRPY).inverse();
 
         declare_parameter<float>("edgeThreshold", 1.0f);

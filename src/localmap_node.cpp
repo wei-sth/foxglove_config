@@ -44,10 +44,15 @@ static Eigen::Matrix4f vectorToMat4f(const std::vector<double>& v) {
 }
 
 LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap", options), mqtt_client_("tcp://127.0.0.1:1883", "obstacle_client_jetson") {
-    sensor_transform_ = Eigen::Affine3f(vectorToMat4f(T_ground_lidar));
+    T_ego_lidar = Eigen::Affine3f(vectorToMat4f(T_ground_lidar));
     // front-left-up to right-front-up
-    sensor_transform_.prerotate((Eigen::Matrix3f() << 0, -1, 0, 1, 0, 0, 0, 0, 1).finished());
-    sensor_inv_transform_ = sensor_transform_.inverse();
+    T_ego_lidar.prerotate((Eigen::Matrix3f() << 0, -1, 0, 1, 0, 0, 0, 0, 1).finished());
+    T_lidar_ego = T_ego_lidar.inverse();
+    T_imu_lidar.linear() = extRot.cast<float>();
+    T_imu_lidar.translation() = extTrans.cast<float>();
+    T_lidar_imu = T_imu_lidar.inverse();
+    T_ego_body = T_ego_lidar * T_lidar_imu;
+    
     mqtt_client_.set_callback(*this);
     mqtt_conn_opts_.set_user_name("zbtest");
     mqtt_conn_opts_.set_password("zbtest");
@@ -997,7 +1002,7 @@ void LocalMap::updatePath(const PointTypePose& pose_in) {
 }
 
 void LocalMap::publishObstacleMapTimerCb() {
-    // LOCAL_DEBUG=true: publish odom-frame voxel map, false: ground frame (based on body frame)
+    // LOCAL_DEBUG=true: publish odom-frame voxel map, false: ego frame
     if (lidarMsgTimestamp.nanoseconds() == 0) {
         return;
     }
@@ -1020,21 +1025,16 @@ void LocalMap::publishObstacleMapTimerCb() {
     std::string out_frame_id = odometryFrame;
 
     if constexpr (!LOCAL_DEBUG) {
-        // Convert voxel centers (stored in odometry/world frame) to ground frame via body frame:
-        // p_body   = (T_odom_body)^{-1} * p_odom
-        // p_ground = sensor_transform_ * p_body   (sensor_transform_ : body -> ground)
-        const Eigen::Affine3f T_body_odom = snap.T_odom_body.inverse();
-        out_frame_id = groundFrame;
-
+        //  ego <- lidar <- body <- odom
+        const Eigen::Affine3f T_ego_odom = T_ego_body * snap.T_odom_body.inverse();
+        out_frame_id = egoFrame;
         for (const auto& voxel : voxels_snapshot) {
             Eigen::Vector3f p_odom(voxel.x, voxel.y, voxel.z);
-            Eigen::Vector3f p_body = T_body_odom * p_odom;
-            Eigen::Vector3f p_ground = sensor_transform_ * p_body;
-
+            Eigen::Vector3f p_ego = T_ego_odom * p_odom;
             pcl::PointXYZI pt;
-            pt.x = p_ground.x();
-            pt.y = p_ground.y();
-            pt.z = p_ground.z();
+            pt.x = p_ego.x();
+            pt.y = p_ego.y();
+            pt.z = p_ego.z();
             pt.intensity = std::min(255.0f, voxel.observation_count * 50.0f);
             voxel_cloud_out->points.push_back(pt);
         }

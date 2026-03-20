@@ -122,10 +122,11 @@ private:
     void deskewPoint(PointType *point, double relTime);
     PointType lidarToImu(const PointType& p);
 
-    // lidar frame -> ground frame
-    Eigen::Affine3f sensor_transform_ = Eigen::Affine3f::Identity();
-    // ground frame -> lidar frame
-    Eigen::Affine3f sensor_inv_transform_ = Eigen::Affine3f::Identity();
+    Eigen::Affine3f T_ego_lidar = Eigen::Affine3f::Identity();  // lidar frame -> ego frame
+    Eigen::Affine3f T_lidar_ego = Eigen::Affine3f::Identity();
+    Eigen::Affine3f T_ego_body = Eigen::Affine3f::Identity();
+    Eigen::Affine3f T_lidar_imu = Eigen::Affine3f::Identity();
+    Eigen::Affine3f T_imu_lidar = Eigen::Affine3f::Identity();
 
     // --- Data for processing ---
     sensor_msgs::msg::PointCloud2::SharedPtr current_lidar_msg;
