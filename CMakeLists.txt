@@ -28,6 +28,9 @@ find_package(OpenMP REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(PahoMqttCpp REQUIRED)
 find_package(Protobuf REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
+find_package(rosbag2_storage REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 set(ros2_lib "rclcpp;rclpy;std_msgs;sensor_msgs;geometry_msgs;nav_msgs;cv_bridge;pcl_msgs;pcl_conversions;visualization_msgs;tf2;tf2_ros;tf2_eigen;tf2_sensor_msgs;tf2_geometry_msgs;nlohmann_json")
 
@@ -52,6 +55,7 @@ add_executable(test_vgicp src/test_vgicp.cpp)
 add_executable(test_vio src/test_vio.cpp)
 add_executable(livo src/livo_node.cpp)
 add_executable(proto_viewer src/proto_viewer.cpp ${OBSTACLE_PROTO_SRCS})
+add_executable(imu_calib_offline src/imu_calib_offline.cpp)
 
 ament_target_dependencies(obstacle_detector_node
   rclcpp
@@ -63,6 +67,12 @@ ament_target_dependencies(obstacle_detector_node
 )
 ament_target_dependencies(localmap_node ${ros2_lib})
 ament_target_dependencies(livo ${ros2_lib})
+ament_target_dependencies(imu_calib_offline
+  rclcpp
+  sensor_msgs
+  rosbag2_cpp
+  rosbag2_storage
+)
 
 target_link_libraries(obstacle_detector ${PCL_LIBRARIES} ${OpenCV_LIBS} nlohmann_json::nlohmann_json)
 target_link_libraries(boundary_detector ${OpenCV_LIBS})
@@ -92,6 +102,9 @@ target_link_libraries(proto_viewer
   ${PCL_LIBRARIES}
   ${Protobuf_LIBRARIES}
 )
+target_link_libraries(imu_calib_offline
+  yaml-cpp
+)
 
 install(TARGETS
   obstacle_detector
@@ -102,6 +115,7 @@ install(TARGETS
   test_vio
   livo
   proto_viewer
+  imu_calib_offline
   DESTINATION lib/${PROJECT_NAME}
 )
 
