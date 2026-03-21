@@ -28,9 +28,10 @@
 // todo: 应该针对local map中的所有obstacle划定一个ROI，对这个ROI中的做ray casting，看看是否可行，找到落到这个ROI中的最后一帧lidar的障碍物
 // 在查询 range_image[u][v] 时，不要只查一个像素，可以查周围 3x3 的邻域，取最小值或者进行某种插值，防止因为雷达光束打偏了而误删障碍物。
 
-// true:  vis_type_ = VisResultType::JSON_AND_VOXELL, output frame (obstacle + registered cloud + path): odom
-// false: vis_type_ = VisResultType::JSON_AND_VOXELE, output frame (obstacle): ego
-static constexpr bool LOCAL_DEBUG = true;
+// vis_type_ = VisResultType::JSON_AND_VOXELL for both true and false, obstacle transform workflow: lidar->body(imu)->odom(debug ends here)->body(imu)->lidar->ego
+// true:  output frame (obstacle + registered cloud + path): odom
+// false: output frame (obstacle): ego
+static constexpr bool LOCAL_DEBUG = false;
 
 static Eigen::Matrix4f vectorToMat4f(const std::vector<double>& v) {
     Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
@@ -105,8 +106,7 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     z_image_ = cv::Mat(nRing, hResolution, CV_32FC1, cv::Scalar(0));
     valid_mask_ = cv::Mat(nRing, hResolution, CV_8UC1, cv::Scalar(0));
 
-    vis_type_ = VisResultType::JSON_AND_VOXELE;
-    if constexpr (LOCAL_DEBUG) { vis_type_ = VisResultType::JSON_AND_VOXELL; }
+    vis_type_ = VisResultType::JSON_AND_VOXELL;
     detector_ = std::make_unique<RangeImageObstacleDetector>(nRing, hResolution, detMaxDistance, detMinClusterHeight, vis_type_);
 
     slam_thread = std::thread(&LocalMap::slamProcessLoop, this);
@@ -273,6 +273,7 @@ void LocalMap::slamProcessLoop() {
 
 void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters,
     const Eigen::Affine3f& pose, double timestamp) {
+    // detector output clusters are in lidar frame
     if (obstacle_clusters.empty()) {
         return;
     }
@@ -293,12 +294,10 @@ void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::Poi
         const Eigen::Vector3f t_ol = R_ob * extTrans_f_ + t_ob;
 
         for (const auto& pt : cluster->points) {
-            // detector output clusters are in LIDAR frame (see obstacle_detector.cpp: transformed back by sensor_inv_transform_)
             // Fast path: p_odom = R_ol * p_lidar + t_ol
             const Eigen::Vector3f p_lidar(pt.x, pt.y, pt.z);
             const Eigen::Vector3f pt_world = R_ol * p_lidar + t_ol;
 
-            // 计算体素坐标
             int ix = std::floor(pt_world.x() / resolution);
             int iy = std::floor(pt_world.y() / resolution);
             int iz = std::floor(pt_world.z() / resolution);
@@ -360,25 +359,16 @@ void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::Poi
 
 void LocalMap::cleanupObstacleVoxelMap(const Eigen::Affine3f& pose, double timestamp) {
     float max_distance = 10.0f;
-    double timeout = 5.0;
     
     auto it = obstacle_voxel_map.begin();
     while (it != obstacle_voxel_map.end()) {
         const Voxel& voxel = it->second;
-        
-        // 计算距离当前位置的距离
         Eigen::Vector3f voxel_pos(voxel.x, voxel.y, voxel.z);
         float dist = (voxel_pos - pose.translation()).norm();
         
         bool should_remove = false;
         
-        // 条件1：超过最大距离
-        if (dist > max_distance) {
-            should_remove = true;
-        }
-        
-        // 条件2：超时
-        if (timestamp - voxel.last_seen_time > timeout) {
+        if (dist > max_distance || timestamp - voxel.last_seen_time > obstacleLifetime) {
             should_remove = true;
         }
         

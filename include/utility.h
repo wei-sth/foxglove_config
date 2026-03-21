@@ -123,6 +123,7 @@ public:
     // obstacle detector
     float detMaxDistance;
     float detMinClusterHeight;
+    float obstacleLifetime;
 
     // IMU
     int imuType;
@@ -273,6 +274,8 @@ public:
         get_parameter("detMaxDistance", detMaxDistance);
         declare_parameter<float>("detMinClusterHeight", 0.2f);
         get_parameter("detMinClusterHeight", detMinClusterHeight);
+        declare_parameter<float>("obstacleLifetime", 1.0f);
+        get_parameter("obstacleLifetime", obstacleLifetime);
 
         declare_parameter<int>("imuType", 0);
         get_parameter("imuType", imuType);

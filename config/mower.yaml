@@ -32,6 +32,9 @@
     detMaxDistance: 10.0
     detMinClusterHeight: 0.05
 
+    # local map
+    obstacleLifetime: 10.0                      # obstacle lifetime in local map, unit: second
+
     # IMU Settings
     # I also tried to adjust odometryNoise in mapOptimization.cpp(odometryNoise is more direct), does not work, seems most importantly is imu noise, waiting for deeper research
     imuType: 0                                  # 0: 6-axis  1: 9-axis
