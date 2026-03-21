@@ -31,7 +31,7 @@
 // vis_type_ = VisResultType::JSON_AND_VOXELL for both true and false, obstacle transform workflow: lidar->body(imu)->odom(debug ends here)->body(imu)->lidar->ego
 // true:  output frame (obstacle + registered cloud + path): odom
 // false: output frame (obstacle): ego
-static constexpr bool LOCAL_DEBUG = false;
+static constexpr bool LOCAL_DEBUG = true;
 
 static Eigen::Matrix4f vectorToMat4f(const std::vector<double>& v) {
     Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
@@ -126,13 +126,13 @@ void LocalMap::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mtx_buffer);
         if (last_timestamp_imu > 0.0 && timestamp < last_timestamp_imu)
         {
-            RCLCPP_ERROR(get_logger(), "imu loop back, offset: %lf \n", last_timestamp_imu - timestamp); // if happens a lot, move out of lock
+            RCLCPP_ERROR(get_logger(), "imu loop back, offset: %lf", last_timestamp_imu - timestamp); // if happens a lot, move out of lock
             return;
         }
         if (last_timestamp_imu > 0.0 && timestamp > last_timestamp_imu + 0.2)
         {
-            RCLCPP_WARN(get_logger(), "imu time stamp jumps %0.4lf seconds \n", timestamp - last_timestamp_imu);
-            return;
+            RCLCPP_WARN(get_logger(), "imu timestamp jumps %0.4lf seconds", timestamp - last_timestamp_imu);
+            // do not return, if imu timestamp jumps because of data loss, last_timestamp_imu will never update again and system will not recover
         }
 
         last_timestamp_imu = timestamp;
@@ -202,6 +202,9 @@ void LocalMap::slamProcessLoop() {
 
         laser_cloud_in = current_lidar_data.cloud;
         lock.unlock();  //unlock what?
+        if (current_imus.empty()) {
+            RCLCPP_ERROR(get_logger(), "no imu for lidar %lf", scan_beg_time);
+        }
 
         // todo: consider deskew of obstacles
         // todo: consider localization fail
@@ -532,12 +535,20 @@ void LocalMap::processIMU(const std::vector<sensor_msgs::msg::Imu::SharedPtr>& i
         return;
     }
 
-    // 清理过旧的 IMU，保留一个在 scan_beg_time 之前的以用于插值
+    // Drop IMUs that are too old. Keep at most ONE sample before scan_beg_time for interpolation.
     while (imu_que_opt.size() > 1 && rclcpp::Time(imu_que_opt[1].header.stamp).seconds() < scan_beg_time) {
         imu_que_opt.pop_front();
     }
+    // If the remaining one IMU is far older than this scan, discard it to avoid long-gap extrapolation.
+    if (!imu_que_opt.empty() && scan_beg_time - rclcpp::Time(imu_que_opt.front().header.stamp).seconds() > 0.2) {
+        imu_que_opt.pop_front();
+    }
+    if (imu_que_opt.empty()) {
+        imu_ptr_cur = 0;
+        return;
+    }
 
-    // 初始化积分起点为 scan_beg_time，旋转为 0
+    // Initialize integration at scan_beg_time with zero rotation.
     imu_ptr_cur = 0;
     imu_rot_x[0] = 0;
     imu_rot_y[0] = 0;
