@@ -90,6 +90,7 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     auto qos_reliable = rclcpp::QoS(10).reliable();
     pub_odom = create_publisher<nav_msgs::msg::Odometry>("/localmap/odometry", qos_reliable);
     pub_path = create_publisher<nav_msgs::msg::Path>("/localmap/path", qos_reliable);
+    pub_initial_guess = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/initial_guess", qos_reliable);
     pub_cloud_registered = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/cloud_registered", qos_reliable);
     pub_local_map = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/local_map", qos_reliable);
     pub_obstacle_map = create_publisher<sensor_msgs::msg::PointCloud2>("/localmap/obstacle_voxel_grid", qos_reliable);
@@ -958,6 +959,11 @@ void LocalMap::performOdometer_v3() {
     }
     last_imu_guess_time_ = scan_end_time;
 
+    // Cache the initial guess
+    initial_guess_pose_ = Eigen::Affine3f::Identity();
+    initial_guess_pose_.linear() = T_curr.linear().cast<float>();
+    initial_guess_pose_.translation() = current_pose.translation();
+
     // --- source 转换 + 协方差估计 ---
     // laser_cloud_in_ds 已经是 0.2m 下采样，直接用
     auto source_cloud = convertToSmallGICP(laser_cloud_in_ds);
@@ -1177,6 +1183,9 @@ void LocalMap::publishResult() {
     pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
     pcl::transformPointCloud(*laser_cloud_in, *cloud_world, current_pose);
     publishCloud(pub_cloud_registered, cloud_world, current_lidar_data_.stamp, odometryFrame);
+    pcl::PointCloud<PointType>::Ptr cloud_guess(new pcl::PointCloud<PointType>());
+    pcl::transformPointCloud(*laser_cloud_in, *cloud_guess, initial_guess_pose_);
+    publishCloud(pub_initial_guess, cloud_guess, current_lidar_data_.stamp, odometryFrame);
 
     if (pub_local_map->get_subscription_count() != 0) {
         publishCloud(pub_local_map, local_map, current_lidar_data_.stamp, odometryFrame);

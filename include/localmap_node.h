@@ -69,6 +69,7 @@ private:
     // --- Publishers ---
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_initial_guess;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_registered;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_local_map;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_map;
@@ -157,6 +158,7 @@ private:
     Eigen::Quaterniond q_main;
 
     // --- IMU-based initial guess (slam thread only, no lock needed) ---
+    Eigen::Affine3f initial_guess_pose_ = Eigen::Affine3f::Identity();  // odom<-body initial guess used for registration
     double last_imu_guess_time_ = -1.0;     // seconds, last lidar scan_end_time used for prediction
     Eigen::Quaterniond q_imu_guess_ = Eigen::Quaterniond::Identity();  // accumulated orientation (relative)
 
