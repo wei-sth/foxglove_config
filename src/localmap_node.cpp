@@ -4,6 +4,8 @@
 #include <string>
 #include <small_gicp/util/downsampling.hpp>
 #include <small_gicp/util/downsampling_omp.hpp>
+#include <small_gicp/registration/reduction_omp.hpp>
+#include <small_gicp/registration/registration.hpp>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
@@ -1034,9 +1036,123 @@ void LocalMap::performOdometer_v3() {
         small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
         keyframe_queue.push_back(kf);
 
-        // 3. 滑窗剔除 15s 前的帧
-        while (!keyframe_queue.empty() &&
-               (scan_beg_time - keyframe_queue.front().timestamp > 15.0)) {
+        // remove key frames older than 10 sec
+        while (!keyframe_queue.empty() && (scan_beg_time - keyframe_queue.front().timestamp > 10.0)) {
+            keyframe_queue.pop_front();
+        }
+
+        // 4. 重建 voxel_target
+        // GaussianVoxelMap 不支持删除，只能整体重建，但速度很快
+        voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
+        for (const auto& frame : keyframe_queue) {
+            voxel_target->insert(*frame.cloud_new);
+            // frame.cloud_new 已经在入队时估好协方差，直接 insert 即可
+        }
+
+        last_key_pose = current_pose;
+    }
+
+    updatePath(poseToPose6D(current_pose));
+}
+
+void LocalMap::performOdometer_v4() {
+    if (laser_cloud_in_ds->empty()) return;
+
+    // --- last pose (float->double) ---
+    Eigen::Isometry3d T_last = Eigen::Isometry3d::Identity();
+    T_last.linear()      = current_pose.linear().cast<double>();
+    T_last.translation() = current_pose.translation().cast<double>();
+
+    // --- IMU initial guess (rotation prediction) ---
+    // Use scan_end_time as pose timestamp proxy; keep translation unchanged.
+    Eigen::Isometry3d T_curr = T_last;
+    if (last_imu_guess_time_ > 0.0) {
+        T_curr = makeImuInitialGuessIsometry_(T_last, last_imu_guess_time_, scan_end_time);
+    }
+    last_imu_guess_time_ = scan_end_time;
+
+    // Cache the initial guess
+    initial_guess_pose_ = Eigen::Affine3f::Identity();
+    initial_guess_pose_.linear() = T_curr.linear().cast<float>();
+    initial_guess_pose_.translation() = current_pose.translation();
+
+    // --- source 转换 + 协方差估计 ---
+    // laser_cloud_in_ds 已经是 0.2m 下采样，直接用
+    auto source_cloud = convertToSmallGICP(laser_cloud_in_ds);
+    small_gicp::estimate_covariances_omp(*source_cloud, 20, num_threads);
+
+    // --- 第一帧：初始化 voxel_target ---
+    if (voxel_target == nullptr) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+
+        KeyFrame kf;
+        kf.timestamp = scan_beg_time;
+        kf.cloud_new  = convertToSmallGICP(cloud_world);
+        // 世界系下估计协方差，insert 后体素协方差才有效
+        small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
+        keyframe_queue.push_back(kf);
+        voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
+        voxel_target->insert(*kf.cloud_new);
+        last_key_pose = current_pose;
+        updatePath(poseToPose6D(current_pose));
+        return;
+    }
+
+    // --- 配准：Scan-to-Model ---
+    // Optimizer update rule (see small_gicp/registration/optimizer.hpp):
+    //   T <- T * exp([w, v])   (right-multiplicative increment)
+    // so the twist [w, v] is expressed in the SOURCE(local) frame.
+    MotionPriorGeneralFactor gp;
+    gp.lambda_rot = enable_motion_prior_ ? motion_prior_rot_lambda_ : 0.0;
+    gp.lambda_lat = enable_motion_prior_ ? motion_prior_lat_lambda_ : 0.0;
+    gp.R_ego_body = T_ego_body.linear().cast<double>();
+    gp.ego_x_offset = motion_prior_ego_x_offset_;
+    gp.ego_y_offset = motion_prior_ego_y_offset_;
+
+    small_gicp::Registration<small_gicp::GICPFactor, small_gicp::ParallelReductionOMP, MotionPriorGeneralFactor> registration;
+    registration.reduction.num_threads  = num_threads;
+    registration.optimizer.max_iterations = 50;
+    // 草地场景收敛阈值可以稍松，避免迭代过多
+    registration.criteria.translation_eps = 1e-3;
+    registration.criteria.rotation_eps    = 1e-3;
+    registration.general_factor = gp;
+    // registration.rejector.max_dist_sq = 1.0; // not improved
+
+    auto result = registration.align(
+        *voxel_target,   // target: GaussianVoxelMap，traits::cov 返回体素协方差
+        *source_cloud,   // source: 带法向协方差的点云
+        *voxel_target,   // 近邻搜索结构复用 target
+        T_curr           // 初始猜测
+    );
+
+    if (result.converged) {
+        current_pose = result.T_target_source.cast<float>();
+    } else {
+        RCLCPP_WARN(get_logger(), "VGICP did not converge!");
+    }
+
+    // --- 关键帧判断 ---
+    float delta_dist  = (current_pose.translation() - last_key_pose.translation()).norm();
+    float delta_angle = Eigen::Quaternionf(last_key_pose.linear())
+                            .angularDistance(Eigen::Quaternionf(current_pose.linear()))
+                        * 180.0f / M_PI;
+
+    if (delta_dist > 0.3f || delta_angle > 10.0f) {
+        // 1. 当前帧转到世界系
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+
+        // 2. 入队
+        KeyFrame kf;
+        kf.timestamp = scan_beg_time;
+        kf.cloud_new = convertToSmallGICP(cloud_world);
+        // 关键：世界系下估计协方差，体素聚合后协方差才反映真实局部几何
+        small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
+        keyframe_queue.push_back(kf);
+
+        // remove key frames older than 10 sec
+        while (!keyframe_queue.empty() && (scan_beg_time - keyframe_queue.front().timestamp > 10.0)) {
             keyframe_queue.pop_front();
         }
 
