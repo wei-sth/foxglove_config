@@ -74,6 +74,7 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
         RCLCPP_ERROR(this->get_logger(), "MQTT Connection failed: %s", exc.what());
     }
 
+    // keep at most 2 lidar scans, need realtime obstacle; keep 100 imu data (100Hz, 1 second), in case of lidar data loss
     sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic, rclcpp::QoS(100).best_effort(), std::bind(&LocalMap::imuHandler, this, std::placeholders::_1));
     sub_lidar = create_subscription<sensor_msgs::msg::PointCloud2>(pointCloudTopic, rclcpp::QoS(2).best_effort(), std::bind(&LocalMap::lidarHandler, this, std::placeholders::_1));
 
@@ -536,12 +537,17 @@ void LocalMap::processIMU(const std::vector<sensor_msgs::msg::Imu::SharedPtr>& i
         return;
     }
 
-    // Drop IMUs that are too old. Keep at most ONE sample before scan_beg_time for interpolation.
-    while (imu_que_opt.size() > 1 && rclcpp::Time(imu_que_opt[1].header.stamp).seconds() < scan_beg_time) {
-        imu_que_opt.pop_front();
+    // Deskew needs [scan_beg, scan_end] + ONE sample at/before scan_beg for interpolation.
+    // IMU initial guess needs (last_imu_guess_time_, scan_end]
+    // last_imu_guess_time_ is the scan_end of previous registered scan. Ideally, last_imu_guess_time_ should be very close to the scan_beg of current scan (to be registered), 
+    // but due to lidar data loss, there might be large gap.
+    double keep_from_t = scan_beg_time;
+    if (last_imu_guess_time_ > 0.0) {
+        keep_from_t = std::min(last_imu_guess_time_, scan_beg_time);
     }
-    // If the remaining one IMU is far older than this scan, discard it to avoid long-gap extrapolation.
-    if (!imu_que_opt.empty() && scan_beg_time - rclcpp::Time(imu_que_opt.front().header.stamp).seconds() > 0.2) {
+
+    // Drop IMUs that are too old. Keep at most ONE sample at/before keep_from_t.
+    while (imu_que_opt.size() > 1 && rclcpp::Time(imu_que_opt[1].header.stamp).seconds() <= keep_from_t) {
         imu_que_opt.pop_front();
     }
     if (imu_que_opt.empty()) {
