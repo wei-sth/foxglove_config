@@ -142,6 +142,9 @@ private:
     };
     LidarData current_lidar_data_;  // slam thread only: this is the frame being processed (NOT aligned)
     std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_buffer;
+    // IMU coverage / gap check for initial guess; if violated we reset local map and restart odom from current frame.
+    double imu_gap_reset_thresh_s_ = 0.05;     // 50ms gap threshold (tune)
+    int imu_min_samples_for_guess_ = 5;        // minimum imu samples in (t_last, t_curr] to trust integration
     std::deque<LidarData> lidar_buffer;
     std::mutex mtx_buffer;
     std::condition_variable cv_data;

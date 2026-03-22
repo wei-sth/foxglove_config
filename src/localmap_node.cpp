@@ -1033,10 +1033,55 @@ void LocalMap::performOdometer_v3() {
     T_last.linear()      = current_pose.linear().cast<double>();
     T_last.translation() = current_pose.translation().cast<double>();
 
-    // --- IMU initial guess (rotation prediction) ---
-    // Use scan_end_time as pose timestamp proxy; keep translation unchanged.
-    Eigen::Isometry3d T_curr = T_last;
+    // --- IMU coverage / gap check for initial guess ---
+    // We require enough IMU samples in (last_imu_guess_time_, scan_end_time] and no large gaps.
+    // Otherwise, the IMU-based initial guess is unreliable (especially during sharp turns),
+    // so we reset local map and restart odom from current frame.
+    bool imu_ok_for_guess = true;
+    double max_gap = 0.0;
+    int imu_cnt = 0;
+
     if (last_imu_guess_time_ > 0.0) {
+        double t_prev = -1.0;
+        for (const auto& imu_msg : imu_que_opt) {
+            const double t = rclcpp::Time(imu_msg.header.stamp).seconds();
+            if (t <= last_imu_guess_time_) continue;
+            if (t > scan_end_time) break;
+
+            imu_cnt++;
+            if (t_prev > 0.0) {
+                const double gap = t - t_prev;
+                if (gap > max_gap) max_gap = gap;
+            }
+            t_prev = t;
+        }
+
+        if (imu_cnt < imu_min_samples_for_guess_ || max_gap > imu_gap_reset_thresh_s_) {
+            imu_ok_for_guess = false;
+        }
+    }
+
+    if (!imu_ok_for_guess) {
+        RCLCPP_ERROR(get_logger(), "IMU coverage insufficient for lidar %lf, reset local map", scan_beg_time);
+
+        // reset local map (restart odom from current frame)
+        keyframe_queue.clear();
+        voxel_target.reset();
+        local_map->clear();
+        last_key_pose = current_pose;
+
+        // reset IMU-guess state
+        last_imu_guess_time_ = -1.0;
+        has_prev_pose_for_vel_ = false;
+        prev_pose_time_ = -1.0;
+        prev_pose_T_ = Eigen::Isometry3d::Identity();
+        vel_ego_.setZero();
+    }
+
+    // --- IMU initial guess (rotation + translation prediction) ---
+    Eigen::Isometry3d T_curr = T_last;
+    if (voxel_target != nullptr && last_imu_guess_time_ > 0.0) {
+        // Only use IMU prediction when map is already initialized and we have a valid previous timestamp.
         T_curr = makeImuInitialGuessIsometry_(T_last, last_imu_guess_time_, scan_end_time);
     }
     last_imu_guess_time_ = scan_end_time;
@@ -1064,6 +1109,7 @@ void LocalMap::performOdometer_v3() {
         keyframe_queue.push_back(kf);
         voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
         voxel_target->insert(*kf.cloud_new);
+        // RCLCPP_INFO(get_logger(), "voxel_target init: voxels=%zu", voxel_target->size());
         last_key_pose = current_pose;
         updatePath(poseToPose6D(current_pose));
         return;
@@ -1156,6 +1202,7 @@ void LocalMap::performOdometer_v3() {
             voxel_target->insert(*frame.cloud_new);
             // frame.cloud_new 已经在入队时估好协方差，直接 insert 即可
         }
+        // RCLCPP_INFO(get_logger(), "voxel_target rebuild: keyframes=%zu voxels=%zu", keyframe_queue.size(), voxel_target->size());
 
         last_key_pose = current_pose;
     }
