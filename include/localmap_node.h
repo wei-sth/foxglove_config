@@ -214,6 +214,18 @@ private:
     double last_imu_guess_time_ = -1.0;     // seconds, last lidar scan_end_time used for prediction
     Eigen::Quaterniond q_imu_guess_ = Eigen::Quaterniond::Identity();  // accumulated orientation (relative)
 
+    // Translation prediction state (for makeImuInitialGuessIsometry_)
+    bool has_prev_pose_for_vel_ = false;
+    double prev_pose_time_ = -1.0;                 // seconds (scan_end_time of previous-previous frame)
+    Eigen::Isometry3d prev_pose_T_ = Eigen::Isometry3d::Identity();  // odom<-body at prev_pose_time_
+    Eigen::Vector3d vel_ego_ = Eigen::Vector3d::Zero();              // estimated ego-frame velocity (m/s)
+    double max_ego_speed_mps_ = 2.0;               // clamp speed for extrapolation
+    double imu_accel_integ_max_dt_ = 0.2;          // seconds, if dt <= this use IMU accel integration, else fallback to constant velocity
+    Eigen::Vector3d gravity_dir_body_unit_ = Eigen::Vector3d(0.0, 0.0, -1.0); // unit vector of gravity direction in body(imu) frame
+    double gravity_mag_mps2_ = 9.81;
+    Eigen::Vector3d gyro_bias_radps_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d acc_bias_mps2_ = Eigen::Vector3d::Zero();
+
     // --- Odometry and Mapping ---
     Eigen::Affine3f current_pose = Eigen::Affine3f::Identity();
     Eigen::Affine3f last_key_pose = Eigen::Affine3f::Identity();

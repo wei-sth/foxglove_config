@@ -50,6 +50,12 @@ static Eigen::Matrix4f vectorToMat4f(const std::vector<double>& v) {
 }
 
 LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap", options), mqtt_client_("tcp://127.0.0.1:1883", "obstacle_client_jetson") {
+    // IMU calibration (from your offline stats)
+    gyro_bias_radps_ << -0.017762434996958294, 0.010876713446207395, 0.016580594586994103;
+    acc_bias_mps2_ << -0.0039463048174464554, -0.062819024226798525, 0.1126052397636137;
+    gravity_mag_mps2_ = 9.6776471196106844;
+    gravity_dir_body_unit_ << 0.030590827162440038, 0.48695830695576769, -0.87288934498038762;
+
     // Cache extrinsics in float for fast per-point transforms
     extRot_f_ = extRot.cast<float>();
     extTrans_f_ = extTrans.cast<float>();
@@ -645,9 +651,19 @@ Eigen::Isometry3d LocalMap::makeImuInitialGuessIsometry_(const Eigen::Isometry3d
         return T_last;
     }
 
+    const double dt_total = t_curr - t_last;
+
     // integrate gyro (rad/s) from (t_last, t_curr] using imu_que_opt
     // Note: sensor_msgs/Imu angular_velocity is in IMU frame.
     Eigen::Quaterniond q_delta = Eigen::Quaterniond::Identity();
+
+    // integrate accel (m/s^2) for short dt to predict translation in ego frame
+    // We integrate in a very conservative way:
+    // - only when dt_total is small (<= imu_accel_integ_max_dt_)
+    // - remove gravity using a fixed gravity magnitude along IMU +Z (approx)
+    // - final result is clamped and fused with constant-velocity fallback
+    Eigen::Vector3d delta_p_ego_from_acc = Eigen::Vector3d::Zero();
+    bool used_acc_integration = false;
 
     // find first imu with stamp > t_last
     size_t idx = 0;
@@ -656,6 +672,10 @@ Eigen::Isometry3d LocalMap::makeImuInitialGuessIsometry_(const Eigen::Isometry3d
     }
 
     double t_prev = t_last;
+
+    // for accel integration (ego frame)
+    Eigen::Vector3d v_ego = vel_ego_;  // start from last estimated velocity (ego)
+    const Eigen::Matrix3d R_ego_body = T_ego_body.linear().cast<double>();
 
     for (; idx < imu_que_opt.size(); ++idx) {
         const auto& imu_msg = imu_que_opt[idx];
@@ -670,8 +690,10 @@ Eigen::Isometry3d LocalMap::makeImuInitialGuessIsometry_(const Eigen::Isometry3d
             continue;
         }
 
+        // --- rotation integration ---
         const Eigen::Vector3d w(imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z);
-        const Eigen::Vector3d dtheta = w * dt;
+        const Eigen::Vector3d w_unbias = w - gyro_bias_radps_;
+        const Eigen::Vector3d dtheta = w_unbias * dt;
         const double angle = dtheta.norm();
         if (angle > 1e-12) {
             const Eigen::Vector3d axis = dtheta / angle;
@@ -679,30 +701,82 @@ Eigen::Isometry3d LocalMap::makeImuInitialGuessIsometry_(const Eigen::Isometry3d
             q_delta = q_delta * Eigen::Quaterniond(aa);
         }
 
+        // --- translation integration (short dt only) ---
+        if (dt_total <= imu_accel_integ_max_dt_) {
+            // IMU linear acceleration is in IMU/body frame. Convert to ego frame.
+            // IMU linear_acceleration is in unit of g (NOT m/s^2) for this device.
+            // Convert to m/s^2 first.
+            Eigen::Vector3d a_body(imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z);
+            a_body *= 9.80665;
+
+            // Gravity/bias removal using IMU calibration (gravity direction in body frame).
+            a_body -= acc_bias_mps2_;
+            a_body -= gravity_mag_mps2_ * gravity_dir_body_unit_;
+
+            const Eigen::Vector3d a_ego = R_ego_body * a_body;
+            v_ego += a_ego * dt;
+            delta_p_ego_from_acc += v_ego * dt;
+            used_acc_integration = true;
+        }
+
         t_prev = t;
     }
 
-    // if last imu < t_curr, extend with last gyro
+    // if last imu < t_curr, extend with last gyro / accel
     if (t_prev < t_curr && idx > 0) {
         const auto& imu_last = imu_que_opt[std::min(idx, imu_que_opt.size() - 1)];
         const double dt = t_curr - t_prev;
         if (dt > 0.0) {
+            // rotation
             const Eigen::Vector3d w(imu_last.angular_velocity.x, imu_last.angular_velocity.y, imu_last.angular_velocity.z);
-            const Eigen::Vector3d dtheta = w * dt;
+            const Eigen::Vector3d w_unbias = w - gyro_bias_radps_;
+            const Eigen::Vector3d dtheta = w_unbias * dt;
             const double angle = dtheta.norm();
             if (angle > 1e-12) {
                 const Eigen::Vector3d axis = dtheta / angle;
                 const Eigen::AngleAxisd aa(angle, axis);
                 q_delta = q_delta * Eigen::Quaterniond(aa);
             }
+
+            // translation (short dt only)
+            if (dt_total <= imu_accel_integ_max_dt_) {
+                Eigen::Vector3d a_body(imu_last.linear_acceleration.x, imu_last.linear_acceleration.y, imu_last.linear_acceleration.z);
+                a_body *= 9.80665;
+                a_body -= acc_bias_mps2_;
+                a_body -= gravity_mag_mps2_ * gravity_dir_body_unit_;
+                const Eigen::Vector3d a_ego = R_ego_body * a_body;
+                v_ego += a_ego * dt;
+                delta_p_ego_from_acc += v_ego * dt;
+                used_acc_integration = true;
+            }
         }
     }
 
-    // Apply delta in odom frame: R_pred = R_last * R_delta_imu_as_body
-    // Here we assume IMU orientation is approximately aligned with body/odom rotation axes
-    // (extrinsics can be applied if needed later).
+    // Apply delta rotation in odom frame: R_pred = R_last * R_delta
     Eigen::Isometry3d T_pred = T_last;
     T_pred.linear() = (T_last.linear() * q_delta.toRotationMatrix());
+
+    // --- translation prediction ---
+    // Default: constant-velocity in ego frame (vel_ego_) with speed clamp.
+    Eigen::Vector3d vel_ego_clamped = vel_ego_;
+    const double speed = vel_ego_clamped.head<2>().norm();
+    if (speed > max_ego_speed_mps_) {
+        vel_ego_clamped *= (max_ego_speed_mps_ / speed);
+    }
+    Eigen::Vector3d delta_p_ego_cv = vel_ego_clamped * dt_total;
+
+    // Fuse: use accel integration only for short dt, otherwise CV.
+    Eigen::Vector3d delta_p_ego = delta_p_ego_cv;
+    if (used_acc_integration) {
+        delta_p_ego = delta_p_ego_from_acc;
+    }
+
+    // Convert ego translation increment to odom using current ego orientation (from T_last).
+    // odom<-ego rotation:
+    const Eigen::Matrix3d R_odom_body = T_last.linear();
+    const Eigen::Matrix3d R_body_ego = R_ego_body.transpose();
+    const Eigen::Matrix3d R_odom_ego = R_odom_body * R_body_ego;
+    T_pred.translation() = T_last.translation() + R_odom_ego * delta_p_ego;
 
     return T_pred;
 }
@@ -970,7 +1044,7 @@ void LocalMap::performOdometer_v3() {
     // Cache the initial guess
     initial_guess_pose_ = Eigen::Affine3f::Identity();
     initial_guess_pose_.linear() = T_curr.linear().cast<float>();
-    initial_guess_pose_.translation() = current_pose.translation();
+    initial_guess_pose_.translation() = T_curr.translation().cast<float>();
 
     // --- source 转换 + 协方差估计 ---
     // laser_cloud_in_ds 已经是 0.2m 下采样，直接用
@@ -1013,6 +1087,40 @@ void LocalMap::performOdometer_v3() {
 
     if (result.converged) {
         current_pose = result.T_target_source.cast<float>();
+
+        // Update ego velocity estimate for translation prediction (constant-velocity fallback).
+        // Use last successful pose pair to estimate v_ego.
+        const double t_pose = scan_end_time;
+        const Eigen::Isometry3d T_pose = result.T_target_source;  // odom<-body (registered)
+
+        if (!has_prev_pose_for_vel_) {
+            prev_pose_T_ = T_pose;
+            prev_pose_time_ = t_pose;
+            has_prev_pose_for_vel_ = true;
+        } else {
+            const double dt_vel = t_pose - prev_pose_time_;
+            if (dt_vel > 1e-3) {
+                // delta position in odom
+                const Eigen::Vector3d dp_odom = T_pose.translation() - prev_pose_T_.translation();
+
+                // Convert to ego frame using current pose orientation.
+                const Eigen::Matrix3d R_odom_body = T_pose.linear();
+                const Eigen::Matrix3d R_ego_body = T_ego_body.linear().cast<double>();
+                const Eigen::Matrix3d R_odom_ego = R_odom_body * R_ego_body.transpose();
+                const Eigen::Vector3d dp_ego = R_odom_ego.transpose() * dp_odom;
+
+                vel_ego_ = dp_ego / dt_vel;
+
+                // clamp speed
+                const double speed_xy = vel_ego_.head<2>().norm();
+                if (speed_xy > max_ego_speed_mps_) {
+                    vel_ego_ *= (max_ego_speed_mps_ / speed_xy);
+                }
+            }
+
+            prev_pose_T_ = T_pose;
+            prev_pose_time_ = t_pose;
+        }
     } else {
         RCLCPP_WARN(get_logger(), "VGICP did not converge!");
     }
@@ -1074,7 +1182,7 @@ void LocalMap::performOdometer_v4() {
     // Cache the initial guess
     initial_guess_pose_ = Eigen::Affine3f::Identity();
     initial_guess_pose_.linear() = T_curr.linear().cast<float>();
-    initial_guess_pose_.translation() = current_pose.translation();
+    initial_guess_pose_.translation() = T_curr.translation().cast<float>();
 
     // --- source 转换 + 协方差估计 ---
     // laser_cloud_in_ds 已经是 0.2m 下采样，直接用
