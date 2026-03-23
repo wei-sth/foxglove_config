@@ -96,6 +96,7 @@ public:
     string pointCloudTopic;
     string imuTopic;
     string odomTopic;
+    string gpsTopic;
 
     //Frames
     string bodyFrame;
@@ -124,6 +125,7 @@ public:
     float detMaxDistance;
     float detMinClusterHeight;
     float obstacleLifetime;
+    float keyFrameLifetime;
 
     // IMU
     int imuType;
@@ -197,6 +199,8 @@ public:
         get_parameter("imuTopic", imuTopic);
         declare_parameter<string>("odomTopic", "/odometry/imu");
         get_parameter("odomTopic", odomTopic);
+        declare_parameter<string>("gpsTopic", "/gps/fix");
+        get_parameter("gpsTopic", gpsTopic);
 
         declare_parameter<string>("bodyFrame", "base_link");
         get_parameter("bodyFrame", bodyFrame);
@@ -268,6 +272,8 @@ public:
         get_parameter("detMinClusterHeight", detMinClusterHeight);
         declare_parameter<float>("obstacleLifetime", 1.0f);
         get_parameter("obstacleLifetime", obstacleLifetime);
+        declare_parameter<float>("keyFrameLifetime", 1.0f);
+        get_parameter("keyFrameLifetime", keyFrameLifetime);
 
         declare_parameter<int>("imuType", 0);
         get_parameter("imuType", imuType);

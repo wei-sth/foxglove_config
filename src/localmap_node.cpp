@@ -974,9 +974,9 @@ void LocalMap::performOdometer_v2() {
         kf.cloud = cloud_world;
         keyframe_queue.push_back(kf);
 
-        // drop frames 15 seconds ago
+        // drop old key frames
         const double current_time = current_lidar_data_.lidar_frame_beg_time;
-        while (!keyframe_queue.empty() && (current_time - keyframe_queue.front().timestamp > 15.0)) {
+        while (!keyframe_queue.empty() && (current_time - keyframe_queue.front().timestamp > keyFrameLifetime)) {
             keyframe_queue.pop_front();
         }
 
@@ -1190,8 +1190,8 @@ void LocalMap::performOdometer_v3() {
         small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
         keyframe_queue.push_back(kf);
 
-        // remove key frames older than 10 sec
-        while (!keyframe_queue.empty() && (scan_beg_time - keyframe_queue.front().timestamp > 10.0)) {
+        // drop old key frames
+        while (!keyframe_queue.empty() && (scan_beg_time - keyframe_queue.front().timestamp > keyFrameLifetime)) {
             keyframe_queue.pop_front();
         }
 
@@ -1306,8 +1306,8 @@ void LocalMap::performOdometer_v4() {
         small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
         keyframe_queue.push_back(kf);
 
-        // remove key frames older than 10 sec
-        while (!keyframe_queue.empty() && (scan_beg_time - keyframe_queue.front().timestamp > 10.0)) {
+        // drop old key frames
+        while (!keyframe_queue.empty() && (scan_beg_time - keyframe_queue.front().timestamp > keyFrameLifetime)) {
             keyframe_queue.pop_front();
         }
 
