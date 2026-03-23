@@ -1107,7 +1107,7 @@ void LocalMap::performOdometer_v3() {
         // 世界系下估计协方差，insert 后体素协方差才有效
         small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
         keyframe_queue.push_back(kf);
-        voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
+        voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(voxelMapLeafSize);
         voxel_target->insert(*kf.cloud_new);
         // RCLCPP_INFO(get_logger(), "voxel_target init: voxels=%zu", voxel_target->size());
         last_key_pose = current_pose;

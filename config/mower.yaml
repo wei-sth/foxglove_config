@@ -68,23 +68,6 @@
                     1.0, 0.0, 0.0,
                     0.0, 0.0, 1.0]
 
-    # LOAM feature threshold
-    edgeThreshold: 1.0
-    surfThreshold: 0.1
-    edgeFeatureMinValidNum: 10
-    surfFeatureMinValidNum: 100
-
-    # voxel filter paprams
-    odometrySurfLeafSize: 0.05                     # default: 0.4 - outdoor, 0.2 - indoor, only used in featureExtraction.cpp, this is the upstream input, must be small enough, otherwise we cannot get accurate result in downstream
-    mappingCornerLeafSize: 0.1                    # default: 0.2 - outdoor, 0.1 - indoor
-    mappingSurfLeafSize: 0.05                       # default: 0.4 - outdoor, 0.2 - indoor, smaller values means more points would search for plane features nearby, if use N_SCAN x Horizon_SCAN data, 0.2 would be too large, need 0.1 to get good result, 0.05 gets better than 0.1
-
-    # robot motion constraint (in case you are using a 2D robot)
-    z_tollerance: 10.0                              # default: 1000.0 meters
-    rotation_tollerance: 1000.0                     # default: 1000.0 radians
-    transSpeedLimit: 1.0                            # m/s, 1.0 and 0.5 not ok, should try 0.3 and 0.3
-    rotSpeedLimit: 0.5                              # radian/s, 1.0 rad = 57.32 degree
-
     # CPU Params
     numberOfCores: 4                              # number of cores for mapping optimization
     mappingProcessInterval: 0.0                  # seconds, regulate mapping frequency
@@ -99,6 +82,11 @@
     surroundingKeyframeMapLeafSize: 0.05           # default: 0.3, downsample local map point cloud
 
     # Optimization
+    z_tollerance: 10.0                              # default: 1000.0 meters
+    rotation_tollerance: 1000.0                     # default: 1000.0 radians
+    transSpeedLimit: 1.0                            # m/s, 1.0 and 0.5 not ok, should try 0.3 and 0.3
+    rotSpeedLimit: 0.5                              # radian/s, 1.0 rad = 57.32 degree
+    voxelMapLeafSize: 0.3                           # default: 0.3, try 0.2-0.5
     deskewByImu: true                            # imu deskew seems to be not trustworthy ...
     scan2MapIter: 50                              # max iter for scan2MapOptimization
     cornerOptimizationSearchSqDis: 0.5            # meter, default: 1.0, squared distance for kdtree search in surfOptimization(scan2MapOptimization)

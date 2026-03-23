@@ -145,16 +145,8 @@ public:
     Eigen::Vector3d extTrans;
     Eigen::Quaterniond extQRPY;
 
-    // LOAM feature threshold
-    float edgeThreshold;
-    float surfThreshold;
-    int edgeFeatureMinValidNum;
-    int surfFeatureMinValidNum;
-
     // voxel filter paprams
-    float odometrySurfLeafSize;
-    float mappingCornerLeafSize;
-    float mappingSurfLeafSize ;
+    float voxelMapLeafSize ;
     float surroundingKeyframeMapLeafSize;
     float loopClosureICPSurfLeafSize ;
 
@@ -314,21 +306,8 @@ public:
         extTrans = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_imu_lidar_t.data(), 3, 1);
         extQRPY = Eigen::Quaterniond(extRPY).inverse();
 
-        declare_parameter<float>("edgeThreshold", 1.0f);
-        get_parameter("edgeThreshold", edgeThreshold);
-        declare_parameter<float>("surfThreshold", 0.1f);
-        get_parameter("surfThreshold", surfThreshold);
-        declare_parameter<int>("edgeFeatureMinValidNum", 10);
-        get_parameter("edgeFeatureMinValidNum", edgeFeatureMinValidNum);
-        declare_parameter<int>("surfFeatureMinValidNum", 100);
-        get_parameter("surfFeatureMinValidNum", surfFeatureMinValidNum);
-
-        declare_parameter<float>("odometrySurfLeafSize", 0.2f);
-        get_parameter("odometrySurfLeafSize", odometrySurfLeafSize);
-        declare_parameter<float>("mappingCornerLeafSize", 0.1f);
-        get_parameter("mappingCornerLeafSize", mappingCornerLeafSize);
-        declare_parameter<float>("mappingSurfLeafSize", 0.2f);
-        get_parameter("mappingSurfLeafSize", mappingSurfLeafSize);
+        declare_parameter<float>("voxelMapLeafSize", 0.3f);
+        get_parameter("voxelMapLeafSize", voxelMapLeafSize);
         declare_parameter<float>("surroundingKeyframeMapLeafSize", 0.2f);
         get_parameter("surroundingKeyframeMapLeafSize", surroundingKeyframeMapLeafSize);
         declare_parameter<float>("z_tollerance", 1000.0f);
