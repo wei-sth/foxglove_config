@@ -12,6 +12,7 @@ SCRIPTS = [
     {"name": "GPTP Sync", "path": "/home/ubuntu/work/linuxptp/run_gptp.sh", "delay": 2},
     {"name": "LiDAR Driver", "path": "/home/ubuntu/work/rs_lidar_ws/run_lidar_driver.sh", "delay": 3},
     {"name": "Camera Driver", "path": "/home/ubuntu/work/sr75_cluster_driver_ws/run_camera_driver_comp.sh", "delay": 3},
+    {"name": "GPS Driver", "path": "/home/ubuntu/work/serial_ws/run_gps.sh", "delay": 3},
     {"name": "Data Recording", "path": "/home/ubuntu/work/bags/record.sh", "delay": 0},
 ]
 
