@@ -36,8 +36,8 @@ def generate_launch_description():
 
         # record slam result
         # ExecuteProcess(
-        #     cmd=['ros2', 'bag', 'record', '-o', '/home/weizh/data/liorf_output', 
-        #          '/liorf/mapping/cloud_registered_raw'],
+        #     cmd=['ros2', 'bag', 'record', '-o', '/home/weizh/data/mower_output_0326_4', 
+        #          '/localmap/cloud_registered'],
         #     output='screen'
         # ),
 

@@ -13,6 +13,7 @@ find_package(std_msgs REQUIRED)
 find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(rclcpp REQUIRED)
+# find_package(sensor_msgs REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(tf2 REQUIRED)
@@ -31,12 +32,17 @@ find_package(Protobuf REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_storage REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(PkgConfig REQUIRED)
+
+# create PROJ_INCLUDE_DIRS and PROJ_LIBRARIES
+pkg_check_modules(PROJ REQUIRED proj)
 
 set(ros2_lib "rclcpp;rclpy;std_msgs;sensor_msgs;geometry_msgs;nav_msgs;cv_bridge;pcl_msgs;pcl_conversions;visualization_msgs;tf2;tf2_ros;tf2_eigen;tf2_sensor_msgs;tf2_geometry_msgs;nlohmann_json")
 
 # generated obstacle.pb.h and obstacle.pb.cc are located in /build/foxglove_config/, so need to include ${CMAKE_CURRENT_BINARY_DIR}
 include_directories(
   include
+  ${PROJ_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${Protobuf_INCLUDE_DIRS}
@@ -56,6 +62,7 @@ add_executable(test_vio src/test_vio.cpp)
 add_executable(livo src/livo_node.cpp)
 add_executable(proto_viewer src/proto_viewer.cpp ${OBSTACLE_PROTO_SRCS})
 add_executable(imu_calib_offline src/imu_calib_offline.cpp)
+# add_executable(imu_rtk_calib src/imu_rtk_calib.cpp)
 
 ament_target_dependencies(obstacle_detector_node
   rclcpp
@@ -73,6 +80,8 @@ ament_target_dependencies(imu_calib_offline
   rosbag2_cpp
   rosbag2_storage
 )
+# ament_target_dependencies(imu_rtk_calib rclcpp sensor_msgs geometry_msgs rosbag2_cpp rosbag2_storage tf2_eigen tf2_geometry_msgs)
+# target_link_libraries(imu_rtk_calib ${PCL_LIBRARIES})
 
 target_link_libraries(obstacle_detector ${PCL_LIBRARIES} ${OpenCV_LIBS} nlohmann_json::nlohmann_json)
 target_link_libraries(boundary_detector ${OpenCV_LIBS})
@@ -89,6 +98,7 @@ target_link_libraries(localmap_node
   PahoMqttCpp::paho-mqttpp3
   OpenMP::OpenMP_CXX
   ${Protobuf_LIBRARIES}
+  ${PROJ_LIBRARIES}
 )
 target_link_libraries(test_vgicp
   ${PCL_LIBRARIES}
@@ -116,6 +126,7 @@ install(TARGETS
   livo
   proto_viewer
   imu_calib_offline
+  # imu_rtk_calib
   DESTINATION lib/${PROJECT_NAME}
 )
 

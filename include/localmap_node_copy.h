@@ -49,6 +49,57 @@ struct KeyFrame {
     small_gicp::PointCloud::Ptr cloud_new;
 };
 
+// small_gicp general factor: motion prior (soft constraint)
+// Note: must be a non-local class (C++ forbids member templates in local classes with some compilers).
+struct MotionPriorGeneralFactor {
+    // soft constraint weights
+    double lambda_rot = 0.0;
+    double lambda_lat = 0.0;
+
+    // extrinsics: ego <- body (both are rigidly attached)
+    Eigen::Matrix3d R_ego_body = Eigen::Matrix3d::Identity();
+
+    // optional: constraint reference point offset (in ego frame)
+    double ego_x_offset = 0.0;
+    double ego_y_offset = 0.0;
+
+    template <typename TargetPointCloud, typename SourcePointCloud, typename TargetTree>
+    void update_linearized_system(
+        const TargetPointCloud&,
+        const SourcePointCloud&,
+        const TargetTree&,
+        const Eigen::Isometry3d& T_target_source,
+        Eigen::Matrix<double, 6, 6>* H,
+        Eigen::Matrix<double, 6, 1>*,
+        double*) const {
+
+        // small_gicp uses right-multiplicative increments:
+        //   T <- T * exp([w, v])
+        // thus twist [w, v] is expressed in SOURCE(local) frame.
+
+        // --- rotation axis constraint (ego_z) ---
+        const Eigen::Vector3d z_ego_in_body = R_ego_body.transpose() * Eigen::Vector3d::UnitZ();
+        const Eigen::Vector3d n = z_ego_in_body.normalized();  // allowed rotation axis in source frame
+        const Eigen::Matrix3d P_perp = Eigen::Matrix3d::Identity() - n * n.transpose();
+        H->block<3, 3>(0, 0) += lambda_rot * P_perp;
+
+        // --- lateral translation constraint (ego_x) ---
+        const Eigen::Vector3d x_ego_in_body = R_ego_body.transpose() * Eigen::Vector3d::UnitX();
+        const Eigen::Vector3d x = x_ego_in_body.normalized();
+        H->block<3, 3>(3, 3) += lambda_lat * (x * x.transpose());
+
+        (void)T_target_source;
+        (void)ego_x_offset;
+        (void)ego_y_offset;
+    }
+
+    template <typename TargetPointCloud, typename SourcePointCloud>
+    void update_error(const TargetPointCloud&, const SourcePointCloud&, const Eigen::Isometry3d&, double*) const {
+        // keep default behavior
+    }
+};
+
+
 class LocalMap : public ParamServer,  public virtual mqtt::callback {
 public:
     LocalMap(const rclcpp::NodeOptions & options);
@@ -110,8 +161,12 @@ private:
     void slamProcessLoop();
     void processIMU(const std::vector<sensor_msgs::msg::Imu::SharedPtr>& imus);
     void pointCloudPreprocessing();
+    void performOdometer();
+    void performOdometer_v1();
+    void performOdometer_v2();
     small_gicp::PointCloud::Ptr convertToSmallGICP(pcl::PointCloud<PointType>::Ptr pcl_cloud);
     void performOdometer_v3();
+    void performOdometer_v4();
     // Use IMU integrated delta (scan_end_time vs previous scan_end_time) to predict pose for registration initial guess
     Eigen::Isometry3d makeImuInitialGuessIsometry_(const Eigen::Isometry3d& T_last, double t_last, double t_curr) const;
     PointTypePose poseToPose6D(const Eigen::Affine3f& pose) const;

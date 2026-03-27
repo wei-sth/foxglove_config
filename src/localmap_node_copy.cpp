@@ -804,6 +804,214 @@ void LocalMap::pointCloudPreprocessing() {
     laser_cloud_in_ds = small_gicp::voxelgrid_sampling(*laser_cloud_in, 0.2);
 }
 
+void LocalMap::performOdometer() {
+    if (is_first_frame) {
+        // 第一帧：将其变换到世界坐标系并存入 last_laser_cloud_in 作为下一帧的 target
+        last_laser_cloud_in->clear();
+        pcl::transformPointCloud(*laser_cloud_in_ds, *last_laser_cloud_in, current_pose);
+        is_first_frame = false;
+        return;
+    }
+
+    if (laser_cloud_in_ds->empty() || last_laser_cloud_in->empty()) return;
+
+    // 策略：将当前帧（Source）与上一帧配准后的点云（Target）进行配准
+    // 局部实例化 VGICP 对象，确保每次配准都是干净的状态，避免 out_of_range 错误
+    small_gicp::RegistrationPCL<PointType, PointType> vgicp;
+    vgicp.setRegistrationType("VGICP");
+    vgicp.setVoxelResolution(1.0);
+    vgicp.setNumThreads(4);
+    vgicp.setMaxCorrespondenceDistance(1.0);
+    vgicp.setNumNeighborsForCovariance(40);
+    vgicp.setMaximumIterations(100);
+
+    vgicp.setInputSource(laser_cloud_in_ds);
+    vgicp.setInputTarget(last_laser_cloud_in);
+
+    // 执行配准
+    pcl::PointCloud<PointType>::Ptr aligned_cloud(new pcl::PointCloud<PointType>());
+    
+    try {
+        // 使用当前位姿作为初始猜测进行配准
+        vgicp.align(*aligned_cloud, current_pose.matrix());
+
+        if (vgicp.hasConverged()) {
+            // 更新当前位姿 (直接获得在世界坐标系下的位姿)
+            current_pose = vgicp.getFinalTransformation();
+        } else {
+            RCLCPP_WARN(get_logger(), "VGICP did not converge!");
+        }
+    } catch (const std::out_of_range& e) {
+        RCLCPP_ERROR(get_logger(), "VGICP align caught out_of_range: %s. Source size: %zu, Target size: %zu", 
+                     e.what(), laser_cloud_in_ds->size(), last_laser_cloud_in->size());
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_logger(), "VGICP align caught exception: %s", e.what());
+    }
+
+    // 将当前帧配准后的点云存入 last_laser_cloud_in，作为下一帧的 target
+    last_laser_cloud_in->clear();
+    pcl::transformPointCloud(*laser_cloud_in_ds, *last_laser_cloud_in, current_pose);
+}
+
+void LocalMap::performOdometer_v1() {
+    // keep all key frames in local map
+    static int cnt = 1;
+    if (is_first_frame) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+        *local_map += *cloud_world;
+        last_key_pose = current_pose;
+        is_first_frame = false;
+        return;
+    }
+
+    if (laser_cloud_in_ds->empty() || local_map->empty()) return;
+
+    small_gicp::RegistrationPCL<PointType, PointType> vgicp;
+    vgicp.setRegistrationType("VGICP");
+    vgicp.setVoxelResolution(1.0);
+    vgicp.setNumThreads(4);
+    vgicp.setMaxCorrespondenceDistance(1.0);
+    vgicp.setNumNeighborsForCovariance(20);
+    vgicp.setMaximumIterations(100);
+
+    vgicp.setInputSource(laser_cloud_in_ds);
+    vgicp.setInputTarget(local_map);
+
+    pcl::PointCloud<PointType>::Ptr aligned_cloud(new pcl::PointCloud<PointType>());
+    
+    try {
+        // 使用当前位姿作为初始猜测进行配准
+        vgicp.align(*aligned_cloud, current_pose.matrix());
+
+        if (vgicp.hasConverged()) {
+            current_pose = vgicp.getFinalTransformation();
+        } else {
+            RCLCPP_WARN(get_logger(), "VGICP did not converge!");
+        }
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_logger(), "VGICP align caught exception: %s", e.what());
+    }
+
+    // keyframe condition: translation exceeds 0.3 m or rotation exceeds 10 degrees
+    float delta_dist = (current_pose.translation() - last_key_pose.translation()).norm();
+    Eigen::Quaternionf q_curr(current_pose.linear());
+    Eigen::Quaternionf q_last(last_key_pose.linear());
+    float delta_angle = q_last.angularDistance(q_curr) * 180.0 / M_PI;
+
+    if (delta_dist > 0.3 || delta_angle > 10.0) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+        *local_map += *cloud_world;
+
+        // source and target should have the same resolution for vgicp
+        local_map = small_gicp::voxelgrid_sampling(*local_map, 0.2);
+
+        if constexpr (LOCAL_DEBUG) {
+            // std::string output_pcd_path = "/home/weizh/data/local_map_" + std::to_string(cnt) + ".pcd";
+            // pcl::io::savePCDFileBinary(output_pcd_path, *local_map);
+            // ++cnt;
+        }
+
+        last_key_pose = current_pose;
+    }
+
+    updatePath(poseToPose6D(current_pose));
+}
+
+void LocalMap::performOdometer_v2() {
+    // drop key frames in local map by sliding window
+    static int cnt = 1;
+    if (is_first_frame) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+        *local_map += *cloud_world;
+        last_key_pose = current_pose;
+        is_first_frame = false;
+        return;
+    }
+
+    if (laser_cloud_in_ds->empty() || local_map->empty()) return;
+
+    small_gicp::RegistrationPCL<PointType, PointType> vgicp;
+    vgicp.setRegistrationType("VGICP");
+    vgicp.setVoxelResolution(1.0);
+    vgicp.setNumThreads(4);
+    vgicp.setMaxCorrespondenceDistance(1.0);
+    vgicp.setNumNeighborsForCovariance(20);
+    vgicp.setMaximumIterations(100);
+
+    vgicp.setInputSource(laser_cloud_in_ds);
+    vgicp.setInputTarget(local_map);
+
+    // to be tested, consider the case when mower moves very fast and local map increases drastically within short time
+    // pcl::CropBox<PointType> crop;
+    // float range = 50.0f; 
+    // crop.setMin(Eigen::Vector4f(current_pose.translation().x() - range, current_pose.translation().y() - range, current_pose.translation().z() - range, 1.0));
+    // crop.setMax(Eigen::Vector4f(current_pose.translation().x() + range, current_pose.translation().y() + range, current_pose.translation().z() + range, 1.0));
+    // crop.setInputCloud(local_map);
+    // pcl::PointCloud<PointType>::Ptr cropped_map(new pcl::PointCloud<PointType>());
+    // crop.filter(*cropped_map);
+    // vgicp.setInputTarget(cropped_map);
+
+    pcl::PointCloud<PointType>::Ptr aligned_cloud(new pcl::PointCloud<PointType>());
+    
+    try {
+        // 使用当前位姿作为初始猜测进行配准
+        vgicp.align(*aligned_cloud, current_pose.matrix());
+
+        if (vgicp.hasConverged()) {
+            current_pose = vgicp.getFinalTransformation();
+        } else {
+            RCLCPP_WARN(get_logger(), "VGICP did not converge!");
+        }
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_logger(), "VGICP align caught exception: %s", e.what());
+    }
+
+    // keyframe condition: translation exceeds 0.3 m or rotation exceeds 10 degrees
+    float delta_dist = (current_pose.translation() - last_key_pose.translation()).norm();
+    Eigen::Quaternionf q_curr(current_pose.linear());
+    Eigen::Quaternionf q_last(last_key_pose.linear());
+    float delta_angle = q_last.angularDistance(q_curr) * 180.0 / M_PI;
+
+    if (delta_dist > 0.3 || delta_angle > 10.0) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+
+        KeyFrame kf;
+        kf.timestamp = current_lidar_data_.lidar_frame_beg_time;
+        kf.pose = current_pose;
+        kf.cloud = cloud_world;
+        keyframe_queue.push_back(kf);
+
+        // drop old key frames
+        const double current_time = current_lidar_data_.lidar_frame_beg_time;
+        while (!keyframe_queue.empty() && (current_time - keyframe_queue.front().timestamp > keyFrameLifetime)) {
+            keyframe_queue.pop_front();
+        }
+
+        // reconstruct local_map
+        local_map->clear();
+        for (const auto& frame : keyframe_queue) {
+            *local_map += *(frame.cloud);
+        }
+
+        // source and target should have the same resolution for vgicp
+        local_map = small_gicp::voxelgrid_sampling(*local_map, 0.2);
+
+        if constexpr (LOCAL_DEBUG) {
+            // std::string output_pcd_path = "/home/weizh/data/local_map_" + std::to_string(cnt) + ".pcd";
+            // pcl::io::savePCDFileBinary(output_pcd_path, *local_map);
+            // ++cnt;
+        }
+
+        last_key_pose = current_pose;
+    }
+
+    updatePath(poseToPose6D(current_pose));
+}
+
 small_gicp::PointCloud::Ptr LocalMap::convertToSmallGICP(pcl::PointCloud<PointType>::Ptr pcl_cloud) {
     auto out = std::make_shared<small_gicp::PointCloud>();
     out->resize(pcl_cloud->size());
@@ -1006,6 +1214,121 @@ void LocalMap::performOdometer_v3() {
             // frame.cloud_new 已经在入队时估好协方差，直接 insert 即可
         }
         // RCLCPP_INFO(get_logger(), "voxel_target rebuild: keyframes=%zu voxels=%zu", keyframe_queue.size(), voxel_target->size());
+
+        last_key_pose = current_pose;
+    }
+
+    updatePath(poseToPose6D(current_pose));
+}
+
+void LocalMap::performOdometer_v4() {
+    if (laser_cloud_in_ds->empty()) return;
+
+    // --- last pose (float->double) ---
+    Eigen::Isometry3d T_last = Eigen::Isometry3d::Identity();
+    T_last.linear()      = current_pose.linear().cast<double>();
+    T_last.translation() = current_pose.translation().cast<double>();
+
+    // --- IMU initial guess (rotation prediction) ---
+    // Use scan_end_time as pose timestamp proxy; keep translation unchanged.
+    Eigen::Isometry3d T_curr = T_last;
+    if (last_imu_guess_time_ > 0.0) {
+        T_curr = makeImuInitialGuessIsometry_(T_last, last_imu_guess_time_, scan_end_time);
+    }
+    last_imu_guess_time_ = scan_end_time;
+
+    // Cache the initial guess
+    initial_guess_pose_ = Eigen::Affine3f::Identity();
+    initial_guess_pose_.linear() = T_curr.linear().cast<float>();
+    initial_guess_pose_.translation() = T_curr.translation().cast<float>();
+
+    // --- source 转换 + 协方差估计 ---
+    // laser_cloud_in_ds 已经是 0.2m 下采样，直接用
+    auto source_cloud = convertToSmallGICP(laser_cloud_in_ds);
+    small_gicp::estimate_covariances_omp(*source_cloud, 20, num_threads);
+
+    // --- 第一帧：初始化 voxel_target ---
+    if (voxel_target == nullptr) {
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+
+        KeyFrame kf;
+        kf.timestamp = scan_beg_time;
+        kf.cloud_new  = convertToSmallGICP(cloud_world);
+        // 世界系下估计协方差，insert 后体素协方差才有效
+        small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
+        keyframe_queue.push_back(kf);
+        voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
+        voxel_target->insert(*kf.cloud_new);
+        last_key_pose = current_pose;
+        updatePath(poseToPose6D(current_pose));
+        return;
+    }
+
+    // --- 配准：Scan-to-Model ---
+    // Optimizer update rule (see small_gicp/registration/optimizer.hpp):
+    //   T <- T * exp([w, v])   (right-multiplicative increment)
+    // so the twist [w, v] is expressed in the SOURCE(local) frame.
+    MotionPriorGeneralFactor gp;
+    gp.lambda_rot = enable_motion_prior_ ? motion_prior_rot_lambda_ : 0.0;
+    gp.lambda_lat = enable_motion_prior_ ? motion_prior_lat_lambda_ : 0.0;
+    gp.R_ego_body = T_ego_body.linear().cast<double>();
+    gp.ego_x_offset = motion_prior_ego_x_offset_;
+    gp.ego_y_offset = motion_prior_ego_y_offset_;
+
+    small_gicp::Registration<small_gicp::GICPFactor, small_gicp::ParallelReductionOMP, MotionPriorGeneralFactor> registration;
+    registration.reduction.num_threads  = num_threads;
+    registration.optimizer.max_iterations = 50;
+    // 草地场景收敛阈值可以稍松，避免迭代过多
+    registration.criteria.translation_eps = 1e-3;
+    registration.criteria.rotation_eps    = 1e-3;
+    registration.general_factor = gp;
+    // registration.rejector.max_dist_sq = 1.0; // not improved
+
+    auto result = registration.align(
+        *voxel_target,   // target: GaussianVoxelMap，traits::cov 返回体素协方差
+        *source_cloud,   // source: 带法向协方差的点云
+        *voxel_target,   // 近邻搜索结构复用 target
+        T_curr           // 初始猜测
+    );
+
+    if (result.converged) {
+        current_pose = result.T_target_source.cast<float>();
+    } else {
+        RCLCPP_WARN(get_logger(), "VGICP did not converge!");
+    }
+
+    // --- 关键帧判断 ---
+    float delta_dist  = (current_pose.translation() - last_key_pose.translation()).norm();
+    float delta_angle = Eigen::Quaternionf(last_key_pose.linear())
+                            .angularDistance(Eigen::Quaternionf(current_pose.linear()))
+                        * 180.0f / M_PI;
+
+    if (delta_dist > 0.3f || delta_angle > 10.0f) {
+        // 1. 当前帧转到世界系
+        pcl::PointCloud<PointType>::Ptr cloud_world(new pcl::PointCloud<PointType>());
+        pcl::transformPointCloud(*laser_cloud_in_ds, *cloud_world, current_pose);
+
+        // 2. 入队
+        KeyFrame kf;
+        kf.timestamp = scan_beg_time;
+        kf.cloud_new = convertToSmallGICP(cloud_world);
+        // 关键：世界系下估计协方差，体素聚合后协方差才反映真实局部几何
+        small_gicp::estimate_covariances_omp(*kf.cloud_new, 20, num_threads);
+        keyframe_queue.push_back(kf);
+
+        // drop old key frames
+        while (!keyframe_queue.empty() && (scan_beg_time - keyframe_queue.front().timestamp > keyFrameLifetime)) {
+            keyframe_queue.pop_front();
+        }
+
+        // 4. 重建 voxel_target
+        // GaussianVoxelMap 不支持删除，只能整体重建，但速度很快
+        voxel_target = std::make_shared<small_gicp::GaussianVoxelMap>(0.3);
+        for (const auto& frame : keyframe_queue) {
+            voxel_target->insert(*frame.cloud_new);
+            // frame.cloud_new 已经在入队时估好协方差，直接 insert 即可
+        }
 
         last_key_pose = current_pose;
     }
