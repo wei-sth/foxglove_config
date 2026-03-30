@@ -2,11 +2,62 @@ import re
 import matplotlib.pyplot as plt
 import os
 import sys
-
 import matplotlib.pyplot as plt
 import os
 
-def analyze_log_file(file_path):
+def analyze_lidar_driver(file_path):
+    if not os.path.exists(file_path):
+        print(f"文件不存在: {file_path}")
+        return
+
+    publish_frame_times = []
+
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if "Publish frame" not in line:
+                continue
+
+            try:
+                parts_by_bracket = line.split(']')
+                log_time_str = parts_by_bracket[1].replace('[', '').strip()
+
+                parts_by_space = line.split()
+                frame_time = float(parts_by_space[-1])
+
+                if frame_time == 0.0:
+                    print(f"find frame time 0.0 at log time {log_time_str}, ignore")
+                    continue
+
+                publish_frame_times.append(frame_time)
+            except (IndexError, ValueError):
+                continue
+
+    publish_frame_intervals = []
+
+    for i in range(1, len(publish_frame_times)):
+        publish_frame_intervals.append(publish_frame_times[i] - publish_frame_times[i - 1])
+
+    avg_frame_interval = sum(publish_frame_intervals) / len(publish_frame_intervals)
+
+    plt.figure(figsize=(20,10))
+    plt.scatter(range(len(publish_frame_intervals)), publish_frame_intervals, s=12, color='blue', label='Publish Frame Interval')
+    plt.axhline(avg_frame_interval, color='orange', linestyle='--', label=f'Avg: {avg_frame_interval:.3f}s')
+    plt.axhline(0.1, color='red', linestyle='-.', label='Expected: 0.100s')
+    plt.title("Publishing Frame Timestamp Interval (Expect 0.1s)")
+    plt.xlabel("Frame Index")
+    plt.ylabel("Interval (Seconds)")
+    plt.legend()
+    plt.grid(axis='y', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.savefig("/home/weizh/data/lidar_driver_publish_frame_interval.png")
+    plt.close()
+
+    print("lidar driver 发布频率分析完成：")
+    print(f"平均 frame 时间戳间隔: {avg_frame_interval:.4f} s")
+    print("/home/weizh/data/lidar_driver_publish_frame_interval.png")
+
+def analyze_obstacle_detector(file_path):
     if not os.path.exists(file_path):
         print(f"文件不存在: {file_path}")
         return
@@ -148,4 +199,5 @@ def analyze_log_file(file_path):
 
 if __name__ == "__main__":
     file_path = '/home/weizh/data/obstacle_detector_node_5585_1770681952528.log'
-    analyze_log_file(file_path)
+    # analyze_obstacle_detector(file_path)
+    analyze_lidar_driver('/home/weizh/data/rslidar_sdk_node_6985_1774403765046.log')
