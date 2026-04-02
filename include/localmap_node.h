@@ -7,7 +7,9 @@
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <geometry_msgs/msg/quaternion_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <mutex>
@@ -40,6 +42,13 @@ struct PublishSnapshot {
     double stamp = 0.0;  // seconds, scan_end_time
     Eigen::Affine3f T_odom_body = Eigen::Affine3f::Identity();
     std::vector<Voxel> voxels_snapshot;  // voxel centers stored in odom frame
+    bool has_gps = false;
+    double gps_stamp = 0.0;
+    double gps_lon = 0.0;
+    double gps_lat = 0.0;
+    double gps_alt = 0.0;
+    geometry_msgs::msg::Quaternion gps_orientation;
+    int gps_status = 0;
 };
 
 struct KeyFrame {
@@ -66,6 +75,8 @@ private:
     // --- Subscriptions ---
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar;
+    rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps;
+    rclcpp::Subscription<geometry_msgs::msg::QuaternionStamped>::SharedPtr sub_gps_orientation;
 
     // --- Publishers ---
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom;
@@ -105,6 +116,8 @@ private:
     // --- Callbacks ---
     void imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg);
     void lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+    void gpsHandler(const sensor_msgs::msg::NavSatFix::SharedPtr msg);
+    void gpsOrientationHandler(const geometry_msgs::msg::QuaternionStamped::SharedPtr msg);
 
     // --- Core Algorithm ---
     void slamProcessLoop();
@@ -116,6 +129,7 @@ private:
     Eigen::Isometry3d makeImuInitialGuessIsometry_(const Eigen::Isometry3d& T_last, double t_last, double t_curr) const;
     PointTypePose poseToPose6D(const Eigen::Affine3f& pose) const;
     void updatePath(const PointTypePose& pose_in);
+    bool transformToLonLat(double x_odom, double y_odom, double z_odom, double& lon, double& lat, double& alt);
     void publishResult();
     void updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr>& obstacle_clusters, 
         const Eigen::Affine3f& pose, double timestamp);
@@ -144,6 +158,8 @@ private:
     pcl::PointCloud<PointType>::Ptr laser_cloud_in_ds;
     
     std::deque<sensor_msgs::msg::Imu> imu_que_opt;
+    std::deque<sensor_msgs::msg::NavSatFix> gpsQueue;
+    std::deque<geometry_msgs::msg::QuaternionStamped> gpsOrientationQueue;
     
     double scan_beg_time;
     double scan_end_time;
@@ -242,6 +258,13 @@ private:
     int getBestEPSG(double lon);
     bool initProjection(int epsg_code);
     bool project(double lon, double lat, double &x, double &y);
+
+    // obstacle geo conversion placeholder:
+    // odom/local frame -> ENU offset (meters) -> lon/lat via PROJ
+    // Replace these placeholders with real extrinsic/geodesic calibration when available.
+    Eigen::Vector3d obstacle_geo_origin_llh_ = Eigen::Vector3d::Zero(); // lon, lat, alt
+    Eigen::Matrix3d obstacle_geo_rot_ = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d obstacle_geo_trans_m_ = Eigen::Vector3d::Zero();
 };
 
 #endif // LOCALMAP_NODE_H

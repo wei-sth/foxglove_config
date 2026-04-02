@@ -30,6 +30,13 @@
 // todo: 应该针对local map中的所有obstacle划定一个ROI，对这个ROI中的做ray casting，看看是否可行，找到落到这个ROI中的最后一帧lidar的障碍物
 // 在查询 range_image[u][v] 时，不要只查一个像素，可以查周围 3x3 的邻域，取最小值或者进行某种插值，防止因为雷达光束打偏了而误删障碍物。
 
+// GPS Orientation: Master -> Slave vector in ENU frame. the quaternion q.toRotationMatrix() = R_enu_body, where body here is rtk master
+// Setup: Master at rear, Slave at front (both on centerline).
+// The Master->Slave vector is aligned with the vehicle's longitudinal centerline.
+
+// EPSG 4547 definition: x -> north (lat), y -> east (lon)
+// in our code, by using proj_normalize_for_visualization, input (lon, lat), output (east, north)
+
 // vis_type_ = VisResultType::JSON_AND_VOXELL for both true and false, obstacle transform workflow: lidar->body(imu)->odom(debug ends here)->body(imu)->lidar->ego
 // true:  output frame (obstacle + registered cloud + path): odom
 // false: output frame (obstacle): ego
@@ -85,9 +92,13 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     // keep at most 2 lidar scans, need realtime obstacle; keep 100 imu data (100Hz, 1 second), in case of lidar data loss
     sub_imu = create_subscription<sensor_msgs::msg::Imu>(imuTopic, rclcpp::QoS(100).best_effort(), std::bind(&LocalMap::imuHandler, this, std::placeholders::_1));
     sub_lidar = create_subscription<sensor_msgs::msg::PointCloud2>(pointCloudTopic, rclcpp::QoS(2).best_effort(), std::bind(&LocalMap::lidarHandler, this, std::placeholders::_1));
+    sub_gps = create_subscription<sensor_msgs::msg::NavSatFix>(gpsTopic, rclcpp::QoS(10).best_effort(), std::bind(&LocalMap::gpsHandler, this, std::placeholders::_1));
+    sub_gps_orientation = create_subscription<geometry_msgs::msg::QuaternionStamped>(gpsOrientationTopic, rclcpp::QoS(10).best_effort(), std::bind(&LocalMap::gpsOrientationHandler, this, std::placeholders::_1));
 
     RCLCPP_INFO(get_logger(), "Subscribed to IMU topic: %s", imuTopic.c_str());
     RCLCPP_INFO(get_logger(), "Subscribed to Lidar topic: %s", pointCloudTopic.c_str());
+    RCLCPP_INFO(get_logger(), "Subscribed to GPS topic: %s", gpsTopic.c_str());
+    RCLCPP_INFO(get_logger(), "Subscribed to GPS orientation topic: %s", gpsOrientationTopic.c_str());
 
     laser_cloud_in.reset(new pcl::PointCloud<PointType>());
     laser_cloud_in_ds.reset(new pcl::PointCloud<PointType>());
@@ -123,6 +134,16 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
 
     // gps projector
     pj_context_ = proj_context_create();
+}
+
+void LocalMap::gpsHandler(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mtx_buffer);
+    gpsQueue.push_back(*msg);
+}
+
+void LocalMap::gpsOrientationHandler(const geometry_msgs::msg::QuaternionStamped::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mtx_buffer);
+    gpsOrientationQueue.push_back(*msg);
 }
 
 LocalMap::~LocalMap() {
@@ -272,6 +293,34 @@ void LocalMap::slamProcessLoop() {
         snap.voxels_snapshot.reserve(obstacle_voxel_map.size());
         for (const auto& kv : obstacle_voxel_map) {
             snap.voxels_snapshot.push_back(kv.second);
+        }
+
+        // Cache GPS info for the same scan in the snapshot.
+        // Prefer the latest GPS sample at or before scan_end_time.
+        {
+            std::lock_guard<std::mutex> lk(mtx_buffer);
+            while (gpsQueue.size() > 1 && rclcpp::Time(gpsQueue[1].header.stamp).seconds() <= scan_end_time) {
+                gpsQueue.pop_front();
+            }
+            if (!gpsQueue.empty()) {
+                const auto& gps = gpsQueue.front();
+                snap.has_gps = true;
+                snap.gps_stamp = rclcpp::Time(gps.header.stamp).seconds();
+                snap.gps_lon = gps.longitude;
+                snap.gps_lat = gps.latitude;
+                snap.gps_alt = gps.altitude;
+                snap.gps_status = static_cast<int>(gps.status.status);
+
+                while (gpsOrientationQueue.size() > 1 && rclcpp::Time(gpsOrientationQueue[1].header.stamp).seconds() <= scan_end_time) {
+                    gpsOrientationQueue.pop_front();
+                }
+                if (!gpsOrientationQueue.empty()) {
+                    snap.gps_orientation = gpsOrientationQueue.front().quaternion;
+                } else {
+                    snap.gps_orientation = geometry_msgs::msg::Quaternion();
+                    snap.gps_orientation.w = 1.0;
+                }
+            }
         }
         {
             std::lock_guard<std::mutex> lk(mtx_latest_snapshot_);
@@ -1031,6 +1080,22 @@ void LocalMap::updatePath(const PointTypePose& pose_in) {
     globalPath.poses.push_back(pose_stamped);
 }
 
+bool LocalMap::transformToLonLat(double x_odom, double y_odom, double z_odom, double& lon, double& lat, double& alt)
+{
+    // Placeholder geo transform:
+    // 1) odom/local -> ENU-like offset using placeholder extrinsics
+    // 2) add offset to origin LLH
+    // Replace obstacle_geo_* with real calibration when available.
+    const Eigen::Vector3d p_odom(x_odom, y_odom, z_odom);
+    const Eigen::Vector3d p_geo = obstacle_geo_rot_ * p_odom + obstacle_geo_trans_m_;
+
+    lon = obstacle_geo_origin_llh_.x() + p_geo.x() / 111320.0;
+    lat = obstacle_geo_origin_llh_.y() + p_geo.y() / 110540.0;
+    alt = obstacle_geo_origin_llh_.z() + p_geo.z();
+
+    return std::isfinite(lon) && std::isfinite(lat) && std::isfinite(alt);
+}
+
 void LocalMap::publishObstacleMapTimerCb() {
     // LOCAL_DEBUG=true: publish odom-frame voxel map, false: ego frame
     if (!has_latest_snapshot_) return;
@@ -1091,12 +1156,64 @@ void LocalMap::publishObstacleMapTimerCb() {
     pb_cloud_.set_timestamp(static_cast<uint64_t>(pb_stamp.nanoseconds()));
     pb_cloud_.set_resolution(0.1f);
     pb_cloud_.mutable_voxels()->Reserve(static_cast<int>(voxel_cloud_out->size()));
+
+    // strategy one: protobuf in ego frame
     for (const auto& pt : voxel_cloud_out->points) {
         auto* v = pb_cloud_.add_voxels();
         v->set_x(pt.x);
         v->set_y(pt.y);
         v->set_z(pt.z);
     }
+
+    // strategy two: protobuf in lon, lat
+    // todo: revise
+    // obstacles to lon lat, strategy 1: convert to epsg 4547, then back to lon,lat; strategy two: lon,lat to lon,lat directly
+    // 障碍物在ENU局部系的偏移（米）
+    // Eigen::Vector3d p_enu_local = R_enu_body * p_body;
+
+    // double R_earth = 6378137.0;
+    // double obs_lat = gps_lat + p_enu_local.y() / R_earth * RAD_TO_DEG;
+    // double obs_lon = gps_lon + p_enu_local.x() / (R_earth * cos(gps_lat * DEG_TO_RAD)) * RAD_TO_DEG;
+    // double obs_alt = gps_alt + p_enu_local.z();
+
+    // if (snap.has_gps) {
+    //     if (!pj_normalized_ && pj_context_) {
+    //         initProjection(getBestEPSG(snap.gps_lon));
+    //     }
+    // }
+
+    // for (const auto& pt : voxel_cloud_out->points) {
+    //     auto* v = pb_cloud_.add_voxels();
+
+    //     if (snap.has_gps && pj_normalized_) {
+    //         double x_enu = 0.0;
+    //         double y_enu = 0.0;
+    //         if (project(snap.gps_lon, snap.gps_lat, x_enu, y_enu)) {
+    //             const Eigen::Vector3d p_enu = snap.gps_orientation * Eigen::Vector3d(pt.x, pt.y, pt.z);
+    //             const double lon = snap.gps_lon + p_enu.x() / 111320.0;
+    //             const double lat = snap.gps_lat + p_enu.y() / 110540.0;
+    //             const double alt = snap.gps_alt + p_enu.z();
+    //             v->set_x(static_cast<float>(lon));
+    //             v->set_y(static_cast<float>(lat));
+    //             v->set_z(static_cast<float>(alt));
+    //             continue;
+    //         }
+    //     }
+
+    //     double lon = 0.0;
+    //     double lat = 0.0;
+    //     double alt = 0.0;
+    //     if (transformToLonLat(pt.x, pt.y, pt.z, lon, lat, alt)) {
+    //         v->set_x(static_cast<float>(lon));
+    //         v->set_y(static_cast<float>(lat));
+    //         v->set_z(static_cast<float>(alt));
+    //     } else {
+    //         // fallback to original coordinates if geo conversion fails
+    //         v->set_x(pt.x);
+    //         v->set_y(pt.y);
+    //         v->set_z(pt.z);
+    //     }
+    // }
 
     // publish protobuf bytes via MQTT
     try {

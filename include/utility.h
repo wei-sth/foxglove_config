@@ -97,6 +97,7 @@ public:
     string imuTopic;
     string odomTopic;
     string gpsTopic;
+    string gpsOrientationTopic;
 
     //Frames
     string bodyFrame;
@@ -201,6 +202,8 @@ public:
         get_parameter("odomTopic", odomTopic);
         declare_parameter<string>("gpsTopic", "/gps/fix");
         get_parameter("gpsTopic", gpsTopic);
+        declare_parameter<string>("gpsOrientationTopic", "/gps/orientation");
+        get_parameter("gpsOrientationTopic", gpsOrientationTopic);
 
         declare_parameter<string>("bodyFrame", "base_link");
         get_parameter("bodyFrame", bodyFrame);
