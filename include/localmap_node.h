@@ -77,6 +77,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar;
     rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps;
     rclcpp::Subscription<geometry_msgs::msg::QuaternionStamped>::SharedPtr sub_gps_orientation;
+    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr sub_color_image;
 
     // --- Publishers ---
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom;
@@ -118,6 +119,7 @@ private:
     void lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void gpsHandler(const sensor_msgs::msg::NavSatFix::SharedPtr msg);
     void gpsOrientationHandler(const geometry_msgs::msg::QuaternionStamped::SharedPtr msg);
+    void colorImageHandler(const sensor_msgs::msg::CompressedImage::SharedPtr msg);
 
     // --- Core Algorithm ---
     void slamProcessLoop();
@@ -160,6 +162,8 @@ private:
     std::deque<sensor_msgs::msg::Imu> imu_que_opt;
     std::deque<sensor_msgs::msg::NavSatFix> gpsQueue;
     std::deque<geometry_msgs::msg::QuaternionStamped> gpsOrientationQueue;
+    std::deque<sensor_msgs::msg::CompressedImage> colorImageQueue;
+    std::mutex mtx_color_image_;
     
     double scan_beg_time;
     double scan_end_time;

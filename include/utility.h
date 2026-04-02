@@ -98,6 +98,7 @@ public:
     string odomTopic;
     string gpsTopic;
     string gpsOrientationTopic;
+    string colorImageTopic;
 
     //Frames
     string bodyFrame;
@@ -143,6 +144,9 @@ public:
     vector<double> T_imu_lidar_R;
     vector<double> extRPYV;
     vector<double> T_imu_lidar_t;
+    vector<double> camera_matrix;
+    vector<double> dist_coeffs;
+    vector<double> T_cam_lidar;
     Eigen::Matrix3d extRot;
     Eigen::Matrix3d extRPY;
     Eigen::Vector3d extTrans;
@@ -204,6 +208,8 @@ public:
         get_parameter("gpsTopic", gpsTopic);
         declare_parameter<string>("gpsOrientationTopic", "/gps/orientation");
         get_parameter("gpsOrientationTopic", gpsOrientationTopic);
+        declare_parameter<string>("colorImageTopic", "/camera/color/image_raw/compressed");
+        get_parameter("colorImageTopic", colorImageTopic);
 
         declare_parameter<string>("bodyFrame", "base_link");
         get_parameter("bodyFrame", bodyFrame);
@@ -309,6 +315,27 @@ public:
         std::vector < double > ze(zea, std::end(zea));
         declare_parameter("T_imu_lidar_t", ze);
         get_parameter("T_imu_lidar_t", T_imu_lidar_t);
+
+        std::vector<double> camera_matrix_default = {
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0
+        };
+        declare_parameter("camera_matrix", camera_matrix_default);
+        get_parameter("camera_matrix", camera_matrix);
+
+        std::vector<double> dist_coeffs_default = {0.0, 0.0, 0.0, 0.0, 0.0};
+        declare_parameter("dist_coeffs", dist_coeffs_default);
+        get_parameter("dist_coeffs", dist_coeffs);
+
+        std::vector<double> T_cam_lidar_default = {
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0
+        };
+        declare_parameter("T_cam_lidar", T_cam_lidar_default);
+        get_parameter("T_cam_lidar", T_cam_lidar);
 
         extRot = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_imu_lidar_R.data(), 3, 3);
         extRPY = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extRPYV.data(), 3, 3);
