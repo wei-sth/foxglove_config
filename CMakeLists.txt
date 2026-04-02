@@ -33,9 +33,16 @@ find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_storage REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
 # create PROJ_INCLUDE_DIRS and PROJ_LIBRARIES
 pkg_check_modules(PROJ REQUIRED proj)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/SegmentationInstance.msg"
+  "msg/SegmentationResult.msg"
+  DEPENDENCIES std_msgs
+)
 
 set(ros2_lib "rclcpp;rclpy;std_msgs;sensor_msgs;geometry_msgs;nav_msgs;cv_bridge;pcl_msgs;pcl_conversions;visualization_msgs;tf2;tf2_ros;tf2_eigen;tf2_sensor_msgs;tf2_geometry_msgs;nlohmann_json")
 
@@ -132,6 +139,7 @@ install(TARGETS
 
 install(PROGRAMS
   scripts/map_publisher.py
+  scripts/yolo_segmentation_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
