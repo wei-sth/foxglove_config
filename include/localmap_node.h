@@ -9,6 +9,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include "foxglove_config/msg/segmentation_result.hpp"
 #include <geometry_msgs/msg/quaternion_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -77,7 +78,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar;
     rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps;
     rclcpp::Subscription<geometry_msgs::msg::QuaternionStamped>::SharedPtr sub_gps_orientation;
-    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr sub_color_image;
+    rclcpp::Subscription<foxglove_config::msg::SegmentationResult>::SharedPtr sub_segmentation;
 
     // --- Publishers ---
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom;
@@ -119,7 +120,7 @@ private:
     void lidarHandler(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void gpsHandler(const sensor_msgs::msg::NavSatFix::SharedPtr msg);
     void gpsOrientationHandler(const geometry_msgs::msg::QuaternionStamped::SharedPtr msg);
-    void colorImageHandler(const sensor_msgs::msg::CompressedImage::SharedPtr msg);
+    void segmentationHandler(const foxglove_config::msg::SegmentationResult::SharedPtr msg);
 
     // --- Core Algorithm ---
     void slamProcessLoop();
@@ -162,12 +163,12 @@ private:
     std::deque<sensor_msgs::msg::Imu> imu_que_opt;
     std::deque<sensor_msgs::msg::NavSatFix> gpsQueue;
     std::deque<geometry_msgs::msg::QuaternionStamped> gpsOrientationQueue;
-    std::deque<sensor_msgs::msg::CompressedImage> colorImageQueue;
-    std::mutex mtx_color_image_;
+    std::deque<foxglove_config::msg::SegmentationResult> segmentationQueue;
+    std::mutex mtx_segmentation_;
     
     double scan_beg_time;
     double scan_end_time;
-    double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0, last_timestamp_img = -1.0;
+    double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0, last_timestamp_segmentation = -1.0;
 
     float imu_rot_x[2000];
     float imu_rot_y[2000];

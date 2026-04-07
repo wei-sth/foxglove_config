@@ -99,6 +99,7 @@ public:
     string gpsTopic;
     string gpsOrientationTopic;
     string colorImageTopic;
+    string segmentationTopic;
 
     //Frames
     string bodyFrame;
@@ -210,6 +211,8 @@ public:
         get_parameter("gpsOrientationTopic", gpsOrientationTopic);
         declare_parameter<string>("colorImageTopic", "/camera/color/image_raw/compressed");
         get_parameter("colorImageTopic", colorImageTopic);
+        declare_parameter<string>("segmentationTopic", "/localmap/segmentation");
+        get_parameter("segmentationTopic", segmentationTopic);
 
         declare_parameter<string>("bodyFrame", "base_link");
         get_parameter("bodyFrame", bodyFrame);
@@ -407,8 +410,6 @@ public:
         get_parameter("surfOptimizationSearchSqDis", surfOptimizationSearchSqDis);
 
         usleep(100);
-        RCLCPP_INFO(get_logger(), "pointCloudTopic: %s", pointCloudTopic.c_str());
-        RCLCPP_INFO(get_logger(), "imuTopic: %s", imuTopic.c_str());
     }
 
     sensor_msgs::msg::Imu imuConverter(const sensor_msgs::msg::Imu& imu_in)

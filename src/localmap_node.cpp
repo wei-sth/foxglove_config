@@ -10,7 +10,9 @@
 #include <iomanip>
 #include <sstream>
 #include <cmath>
-#include <sensor_msgs/msg/compressed_image.hpp>
+#include "foxglove_config/msg/segmentation_result.hpp"
+#include "foxglove_config/msg/segmentation_instance.hpp"
+#include <algorithm>
 
 // robosense airy frame_id: rslidar
 // bbox is not suitable for indoor, I tried to use nav2_msgs/msg/VoxelGrid, but rviz cannot show
@@ -95,13 +97,13 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     sub_lidar = create_subscription<sensor_msgs::msg::PointCloud2>(pointCloudTopic, rclcpp::QoS(2).best_effort(), std::bind(&LocalMap::lidarHandler, this, std::placeholders::_1));
     sub_gps = create_subscription<sensor_msgs::msg::NavSatFix>(gpsTopic, rclcpp::QoS(10).best_effort(), std::bind(&LocalMap::gpsHandler, this, std::placeholders::_1));
     sub_gps_orientation = create_subscription<geometry_msgs::msg::QuaternionStamped>(gpsOrientationTopic, rclcpp::QoS(10).best_effort(), std::bind(&LocalMap::gpsOrientationHandler, this, std::placeholders::_1));
-    sub_color_image = create_subscription<sensor_msgs::msg::CompressedImage>(colorImageTopic, rclcpp::QoS(10).best_effort(), std::bind(&LocalMap::colorImageHandler, this, std::placeholders::_1));
+    sub_segmentation = create_subscription<foxglove_config::msg::SegmentationResult>(segmentationTopic, rclcpp::QoS(10).best_effort(), std::bind(&LocalMap::segmentationHandler, this, std::placeholders::_1));
 
     RCLCPP_INFO(get_logger(), "Subscribed to IMU topic: %s", imuTopic.c_str());
     RCLCPP_INFO(get_logger(), "Subscribed to Lidar topic: %s", pointCloudTopic.c_str());
     RCLCPP_INFO(get_logger(), "Subscribed to GPS topic: %s", gpsTopic.c_str());
     RCLCPP_INFO(get_logger(), "Subscribed to GPS orientation topic: %s", gpsOrientationTopic.c_str());
-    RCLCPP_INFO(get_logger(), "Subscribed to color image topic: %s", colorImageTopic.c_str());
+    RCLCPP_INFO(get_logger(), "Subscribed to segmentation topic: %s", segmentationTopic.c_str());
 
     laser_cloud_in.reset(new pcl::PointCloud<PointType>());
     laser_cloud_in_ds.reset(new pcl::PointCloud<PointType>());
@@ -149,13 +151,17 @@ void LocalMap::gpsOrientationHandler(const geometry_msgs::msg::QuaternionStamped
     gpsOrientationQueue.push_back(*msg);
 }
 
-void LocalMap::colorImageHandler(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
-    std::lock_guard<std::mutex> lock(mtx_color_image_);
-    last_timestamp_img = rclcpp::Time(msg->header.stamp).seconds();
-    colorImageQueue.push_back(*msg);
-    while (colorImageQueue.size() > 30) {
-        colorImageQueue.pop_front();
+void LocalMap::segmentationHandler(const foxglove_config::msg::SegmentationResult::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(mtx_segmentation_);
+    last_timestamp_segmentation = rclcpp::Time(msg->header.stamp).seconds();
+    segmentationQueue.push_back(*msg);
+    while (segmentationQueue.size() > 30) {
+        segmentationQueue.pop_front();
     }
+
+    const auto& seg = segmentationQueue.back();
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "Received segmentation frame: %u x %u, instances=%zu",
+                         seg.image_width, seg.image_height, seg.instances.size());
 }
 
 LocalMap::~LocalMap() {

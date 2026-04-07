@@ -80,6 +80,8 @@ ament_target_dependencies(obstacle_detector_node
   nlohmann_json
 )
 ament_target_dependencies(localmap_node ${ros2_lib})
+rosidl_get_typesupport_target(localmap_node_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+target_link_libraries(localmap_node ${localmap_node_typesupport_target})
 ament_target_dependencies(livo ${ros2_lib})
 ament_target_dependencies(imu_calib_offline
   rclcpp
