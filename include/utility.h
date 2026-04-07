@@ -145,6 +145,7 @@ public:
     vector<double> T_imu_lidar_R;
     vector<double> extRPYV;
     vector<double> T_imu_lidar_t;
+    string camera_model;
     vector<double> camera_matrix;
     vector<double> dist_coeffs;
     vector<double> T_cam_lidar;
@@ -318,6 +319,8 @@ public:
         std::vector < double > ze(zea, std::end(zea));
         declare_parameter("T_imu_lidar_t", ze);
         get_parameter("T_imu_lidar_t", T_imu_lidar_t);
+        declare_parameter<string>("camera_model", "fisheye");
+        get_parameter("camera_model", camera_model);
 
         std::vector<double> camera_matrix_default = {
             1.0, 0.0, 0.0,

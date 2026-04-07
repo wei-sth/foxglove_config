@@ -75,6 +75,7 @@
 
     # dist_coeffs always 5 elements, fisheye uses 4
     # fisheye width=1280, height=720
+    camera_model: "fisheye"
     camera_matrix: [595.3798042148748, 0.0, 642.5699347751589,
                     0.0, 595.4025318752444, 387.65081388198246,
                     0.0, 0.0, 1.0]

@@ -154,6 +154,9 @@ private:
     Eigen::Affine3f T_imu_lidar = Eigen::Affine3f::Identity();
     Eigen::Matrix3f extRot_f_ = Eigen::Matrix3f::Identity();  // lidar -> imu, double reading from yaml, try float might be OK enough
     Eigen::Vector3f extTrans_f_ = Eigen::Vector3f::Zero();
+    cv::Mat cameraMatrix_;
+    cv::Mat distCoeffs_;
+    cv::Mat T_cam_lidar_;
 
     // --- Data for processing ---
     sensor_msgs::msg::PointCloud2::SharedPtr current_lidar_msg;

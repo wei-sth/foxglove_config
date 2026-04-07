@@ -28,6 +28,13 @@ def generate_launch_description():
         ),
         Node(
             package='foxglove_config',
+            executable='yolo_segmentation_node.py',
+            name='yolo_segmentation_node',
+            parameters=[parameter_file],
+            output='screen'
+        ),
+        Node(
+            package='foxglove_config',
             executable='localmap_node',
             name='localmap_node',
             parameters=[parameter_file],
@@ -36,7 +43,7 @@ def generate_launch_description():
 
         # record slam result
         # ExecuteProcess(
-        #     cmd=['ros2', 'bag', 'record', '-o', '/home/weizh/data/mower_output_0326_4', 
+        #     cmd=['ros2', 'bag', 'record', '-o', '/home/weizh/data/mower_output_0326_6', 
         #          '/localmap/cloud_registered'],
         #     output='screen'
         # ),

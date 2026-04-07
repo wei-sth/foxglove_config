@@ -69,6 +69,33 @@ LocalMap::LocalMap(const rclcpp::NodeOptions & options) : ParamServer("localmap"
     // Cache extrinsics in float for fast per-point transforms
     extRot_f_ = extRot.cast<float>();
     extTrans_f_ = extTrans.cast<float>();
+
+    // camera intrinsics for projection
+    cameraMatrix_ = cv::Mat::eye(3, 3, CV_64F);
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            cameraMatrix_.at<double>(r, c) = camera_matrix[r * 3 + c];
+        }
+    }
+    if (camera_model == "fisheye") {
+        distCoeffs_ = cv::Mat::zeros(4, 1, CV_64F);
+        for (size_t i = 0; i < 4; ++i) {
+            distCoeffs_.at<double>(static_cast<int>(i), 0) = dist_coeffs[i];
+        }
+    } else {
+        distCoeffs_ = cv::Mat::zeros(5, 1, CV_64F);
+        for (size_t i = 0; i < 5; ++i) {
+            distCoeffs_.at<double>(static_cast<int>(i), 0) = dist_coeffs[i];
+        }
+    }
+
+    // camera extrinsics
+    T_cam_lidar_ = cv::Mat::eye(4, 4, CV_64F);
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            T_cam_lidar_.at<double>(r, c) = T_cam_lidar[r * 4 + c];
+        }
+    }
     T_ego_lidar = Eigen::Affine3f(vectorToMat4f(T_ground_lidar));
     // front-left-up to right-front-up
     T_ego_lidar.prerotate((Eigen::Matrix3f() << 0, -1, 0, 1, 0, 0, 0, 0, 1).finished());
@@ -153,15 +180,7 @@ void LocalMap::gpsOrientationHandler(const geometry_msgs::msg::QuaternionStamped
 
 void LocalMap::segmentationHandler(const foxglove_config::msg::SegmentationResult::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(mtx_segmentation_);
-    last_timestamp_segmentation = rclcpp::Time(msg->header.stamp).seconds();
     segmentationQueue.push_back(*msg);
-    while (segmentationQueue.size() > 30) {
-        segmentationQueue.pop_front();
-    }
-
-    const auto& seg = segmentationQueue.back();
-    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "Received segmentation frame: %u x %u, instances=%zu",
-                         seg.image_width, seg.image_height, seg.instances.size());
 }
 
 LocalMap::~LocalMap() {
@@ -299,9 +318,10 @@ void LocalMap::slamProcessLoop() {
         auto t4 = std::chrono::steady_clock::now();
 
         // remove dynamic by range image
-        auto cloud_filtered_normal = filterByRangeEgo(current_lidar_data.cloud_raw, max_range_);
-        buildRangeImage(cloud_filtered_normal);
+        // auto cloud_filtered_normal = filterByRangeEgo(current_lidar_data.cloud_raw, max_range_);
+        // buildRangeImage(cloud_filtered_normal);
 
+        // combine image detection and lidar detection, combine obstacle in registered lidar frames
         updateObstacleVoxelMap(obstacle_clusters, current_pose, scan_end_time);
 
         // slam thread generates snapshot, better than timer read slam work-in-progress variables.
@@ -440,6 +460,104 @@ void LocalMap::updateObstacleVoxelMap(const std::vector<pcl::PointCloud<pcl::Poi
         } else {
             // 新体素，直接添加
             obstacle_voxel_map[key] = new_voxel;
+        }
+    }
+
+    // use image info
+    // 丢掉比当前 scan_beg_time 早 0.2s 以上的 segmentation
+    while (!segmentationQueue.empty()) {
+        const double seg_stamp = rclcpp::Time(segmentationQueue.front().header.stamp).seconds();
+        if (seg_stamp >= scan_beg_time - 0.2) {
+            break;
+        }
+        segmentationQueue.pop_front();
+    }
+
+    // 找到与当前 lidar 时间最接近的 segmentation 结果
+    const foxglove_config::msg::SegmentationResult* closest_seg = nullptr;
+    double closest_seg_dt = std::numeric_limits<double>::max();
+
+    for (const auto& seg : segmentationQueue) {
+        const double seg_stamp = rclcpp::Time(seg.header.stamp).seconds();
+        const double dt = std::abs(seg_stamp - timestamp);
+        if (dt < closest_seg_dt) {
+            closest_seg_dt = dt;
+            closest_seg = &seg;
+        }
+    }
+
+    // 用 segmentation mask 过滤已有 obstacle_voxel_map
+    // 逻辑：voxel 投影到图像范围内，但对应像素在所有 instance mask 上都没有任何交集，则删除该 voxel
+    if (closest_seg != nullptr) {
+        const bool seg_mask_is_bitpacked = true;  // yolo_segmentation_node.py uses np.packbits(..., bitorder='little')
+
+        const Eigen::Affine3f T_body_lidar = T_lidar_imu.inverse();
+
+        for (auto it = obstacle_voxel_map.begin(); it != obstacle_voxel_map.end(); ) {
+            const Voxel& voxel = it->second;
+
+            // voxel 存储在 odom/world 中，先转回 body(imu)，再转到 lidar，最后转到 camera 投影
+            const Eigen::Vector3f p_world(voxel.x, voxel.y, voxel.z);
+            const Eigen::Vector3f p_body = pose.inverse() * p_world;
+            const Eigen::Vector3f p_lidar = T_body_lidar * p_body;
+            const Eigen::Vector3f p_cam(
+                static_cast<float>(T_cam_lidar_.at<double>(0, 0) * p_lidar.x() + T_cam_lidar_.at<double>(0, 1) * p_lidar.y() + T_cam_lidar_.at<double>(0, 2) * p_lidar.z() + T_cam_lidar_.at<double>(0, 3)),
+                static_cast<float>(T_cam_lidar_.at<double>(1, 0) * p_lidar.x() + T_cam_lidar_.at<double>(1, 1) * p_lidar.y() + T_cam_lidar_.at<double>(1, 2) * p_lidar.z() + T_cam_lidar_.at<double>(1, 3)),
+                static_cast<float>(T_cam_lidar_.at<double>(2, 0) * p_lidar.x() + T_cam_lidar_.at<double>(2, 1) * p_lidar.y() + T_cam_lidar_.at<double>(2, 2) * p_lidar.z() + T_cam_lidar_.at<double>(2, 3)));
+
+            if (p_cam.z() <= 0.5f) {
+                ++it;
+                continue;
+            }
+
+            std::vector<cv::Point3f> pts3d = { cv::Point3f(p_cam.x(), p_cam.y(), p_cam.z()) };
+            std::vector<cv::Point2f> pts2d;
+            cv::fisheye::projectPoints(pts3d, pts2d, cv::Vec3d::zeros(), cv::Vec3d::zeros(), cameraMatrix_, distCoeffs_);
+
+            if (pts2d.empty()) {
+                ++it;
+                continue;
+            }
+
+            const int px = static_cast<int>(std::lround(pts2d[0].x));
+            const int py = static_cast<int>(std::lround(pts2d[0].y));
+
+            if (px >= 0 && px < static_cast<int>(closest_seg->image_width) &&
+                py >= 0 && py < static_cast<int>(closest_seg->image_height)) {
+                bool has_mask_overlap = false;
+
+                for (const auto& instance : closest_seg->instances) {
+                    if (instance.mask_width == 0 || instance.mask_height == 0) {
+                        continue;
+                    }
+
+                    if (px >= static_cast<int>(instance.mask_width) ||
+                        py >= static_cast<int>(instance.mask_height)) {
+                        continue;
+                    }
+
+                    if (!seg_mask_is_bitpacked) {
+                        continue;
+                    }
+
+                    const size_t bit_idx = static_cast<size_t>(py) * static_cast<size_t>(instance.mask_width)
+                                         + static_cast<size_t>(px);
+                    const size_t byte_idx = bit_idx / 8;
+                    const uint8_t bit_mask = static_cast<uint8_t>(1u << (bit_idx % 8));
+
+                    if (byte_idx < instance.mask_data.size() && (instance.mask_data[byte_idx] & bit_mask) != 0) {
+                        has_mask_overlap = true;
+                        break;
+                    }
+                }
+
+                if (!has_mask_overlap) {
+                    it = obstacle_voxel_map.erase(it);
+                    continue;
+                }
+            }
+
+            ++it;
         }
     }
     
