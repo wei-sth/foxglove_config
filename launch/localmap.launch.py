@@ -28,6 +28,13 @@ def generate_launch_description():
         ),
         Node(
             package='foxglove_config',
+            executable='yolo_segmentation_node.py',
+            name='yolo_segmentation_node',
+            parameters=[parameter_file],
+            output='screen'
+        ),
+        Node(
+            package='foxglove_config',
             executable='localmap_node',
             name='localmap_node',
             parameters=[parameter_file],
