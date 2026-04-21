@@ -1,11 +1,13 @@
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
+#include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/visualization/pcl_visualizer.h>
@@ -110,6 +112,13 @@ int main(int argc, char** argv) {
             << "  voxel_count: " << cloud.voxels_size() << "\n";
 
   auto pcl_cloud = ToPclPointCloud(cloud);
+
+  const std::string pcd_path = std::filesystem::path(args.input_path).replace_extension(".pcd").string();
+  if (pcl::io::savePCDFileASCII(pcd_path, *pcl_cloud) != 0) {
+    std::cerr << "Failed to save PCD to: " << pcd_path << "\n";
+    return 4;
+  }
+  std::cout << "[voxel_cloud_viewer] saved pcd: " << pcd_path << "\n";
 
   auto viewer = std::make_shared<pcl::visualization::PCLVisualizer>("VoxelCloud Viewer (PCL)");
   viewer->setBackgroundColor(0.05, 0.05, 0.05);
